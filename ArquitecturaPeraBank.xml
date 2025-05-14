@@ -1,0 +1,214 @@
+<mxfile>
+  <diagram name="Página-1" id="0">
+    <mxGraphModel dx="1426" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        
+        <!-- Título -->
+        <mxCell id="title" value="&lt;b&gt;PeraBank - Arquitectura Serverless en AWS (Beta Universitaria)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size: 14px&quot;&gt;Pipeline de Datos + ML para Riesgo Crediticio&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="425" y="30" width="200" height="40" as="geometry"/>
+        </mxCell>
+        
+        <!-- Sección 1: Entorno Local -->
+        <mxCell id="localEnv" value="&lt;b&gt;1. Entorno Local&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="50" y="80" width="120" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="devMachine" value="&lt;b&gt;Máquina del Desarrollador&lt;/b&gt;&lt;br&gt;16GB RAM, 1TB SSD, GPU RTX 4050" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="110" width="160" height="60" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="scripts" value="Scripts Python (Faker)&lt;br&gt;Generación de Datos Sintéticos" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="190" width="160" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="upload" value="Carga Inicial a S3&lt;br&gt;(AWS CLI/boto3)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="250" width="160" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow1" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="devMachine" target="scripts">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow2" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="scripts" target="upload">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Sección 2: CI/CD -->
+        <mxCell id="ciCd" value="&lt;b&gt;2. CI/CD (Azure DevOps)&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="300" y="80" width="120" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="azureRepos" value="Azure Repos&lt;br&gt;(Git)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="110" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="azurePipelines" value="Azure Pipelines&lt;br&gt;(CI/CD)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="170" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow3" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="azureRepos" target="azurePipelines">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Sección 3: Pipeline de Datos AWS -->
+        <mxCell id="dataPipeline" value="&lt;b&gt;3. Pipeline de Datos AWS&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="50" y="320" width="120" height="20" as="geometry"/>
+        </mxCell>
+        
+        <!-- Capa Bronce -->
+        <mxCell id="bronzeS3" value="S3 Bronce&lt;br&gt;perabank-bronze-data-bank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;" vertex="1" parent="1">
+          <mxGeometry x="50" y="350" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="glueBronze" value="Glue Catalog&lt;br&gt;perabank_bronze_db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;" vertex="1" parent="1">
+          <mxGeometry x="50" y="410" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow4" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="bronzeS3" target="glueBronze">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Step Functions -->
+        <mxCell id="stepFunctions" value="Step Functions&lt;br&gt;PeraBankETLStateMachine" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;" vertex="1" parent="1">
+          <mxGeometry x="200" y="380" width="140" height="50" as="geometry"/>
+        </mxCell>
+        
+        <!-- Capa Plata -->
+        <mxCell id="lambdaBronzeSilver" value="Lambda&lt;br&gt;Transformación Bronce→Plata" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6E6;" vertex="1" parent="1">
+          <mxGeometry x="50" y="480" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="silverS3" value="S3 Plata&lt;br&gt;perabank-silver-data-bank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;" vertex="1" parent="1">
+          <mxGeometry x="50" y="540" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="glueSilver" value="Glue Catalog&lt;br&gt;perabank_silver_db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;" vertex="1" parent="1">
+          <mxGeometry x="50" y="600" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow5" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="lambdaBronzeSilver" target="silverS3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow6" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="silverS3" target="glueSilver">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Capa Oro -->
+        <mxCell id="lambdaSilverGold" value="Lambda&lt;br&gt;Transformación Plata→Oro" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6E6;" vertex="1" parent="1">
+          <mxGeometry x="50" y="670" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="goldS3" value="S3 Oro&lt;br&gt;perabank-gold-data-bank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;" vertex="1" parent="1">
+          <mxGeometry x="50" y="730" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="glueGold" value="Glue Catalog&lt;br&gt;perabank_gold_db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;" vertex="1" parent="1">
+          <mxGeometry x="50" y="790" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow7" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="lambdaSilverGold" target="goldS3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow8" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="goldS3" target="glueGold">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Conexiones Step Functions -->
+        <mxCell id="arrow9" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;exitX=1;exitY=0.3;" edge="1" parent="1" source="stepFunctions" target="lambdaBronzeSilver">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow10" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;exitX=1;exitY=0.3;" edge="1" parent="1" source="stepFunctions" target="lambdaSilverGold">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Sección 4: Machine Learning -->
+        <mxCell id="ml" value="&lt;b&gt;4. Machine Learning&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="300" y="320" width="120" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="sagemaker" value="Amazon SageMaker&lt;br&gt;(Entrenamiento del Modelo)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;" vertex="1" parent="1">
+          <mxGeometry x="300" y="350" width="140" height="50" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="mlArtifacts" value="S3 Modelos&lt;br&gt;perabank-ml-artifacts-bank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;" vertex="1" parent="1">
+          <mxGeometry x="300" y="420" width="140" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow11" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="sagemaker" target="mlArtifacts">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Sección 5: API de Inferencia -->
+        <mxCell id="api" value="&lt;b&gt;5. API de Inferencia&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="500" y="320" width="120" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="apiGateway" value="API Gateway&lt;br&gt;(Endpoint REST)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2E6;" vertex="1" parent="1">
+          <mxGeometry x="500" y="350" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="lambdaInference" value="Lambda&lt;br&gt;Predicción" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6E6;" vertex="1" parent="1">
+          <mxGeometry x="500" y="410" width="120" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow12" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="apiGateway" target="lambdaInference">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="arrow13" style="edgeStyle=none;html=1;entryX=0.25;entryY=0;exitX=0.5;exitY=1;" edge="1" parent="1" source="mlArtifacts" target="lambdaInference">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="370" y="460" as="sourcePoint"/>
+            <mxPoint x="560" y="410" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Conexión Upload a S3 Bronce -->
+        <mxCell id="arrow14" style="edgeStyle=none;html=1;entryX=0.5;entryY=1;exitX=0.5;exitY=0;" edge="1" parent="1" source="upload" target="bronzeS3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="130" y="290" as="sourcePoint"/>
+            <mxPoint x="110" y="350" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Conexión Azure Pipelines a Step Functions -->
+        <mxCell id="arrow15" style="edgeStyle=none;html=1;entryX=0.5;entryY=1;exitX=0.25;exitY=0;" edge="1" parent="1" source="azurePipelines" target="stepFunctions">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="360" y="210" as="sourcePoint"/>
+            <mxPoint x="200" y="380" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Conexión S3 Oro a SageMaker -->
+        <mxCell id="arrow16" style="edgeStyle=none;html=1;entryX=1;entryY=0.5;exitX=0;exitY=0.5;" edge="1" parent="1" source="goldS3" target="sagemaker">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="170" y="750" as="sourcePoint"/>
+            <mxPoint x="300" y="375" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Servicios Transversales -->
+        <mxCell id="crossServices" value="&lt;b&gt;Servicios Transversales&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="600" y="80" width="120" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="iam" value="IAM&lt;br&gt;(Roles y Permisos)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="110" width="100" height="40" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="cloudwatch" value="CloudWatch&lt;br&gt;(Logs y Métricas)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="170" width="100" height="40" as="geometry"/>
+        </mxCell>
+        
+        <!-- Notas -->
+        <mxCell id="notes" value="&lt;b&gt;Notas:&lt;/b&gt;&lt;br&gt;- Todos los servicios AWS acceden mediante Roles IAM&lt;br&gt;- El pipeline ETL es orquestado por Step Functions&lt;br&gt;- Los datos fluyen Bronce → Plata → Oro&lt;br&gt;- El modelo se entrena con datos de la capa Oro" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="50" y="850" width="350" height="80" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

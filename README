@@ -1,0 +1,88 @@
+# PeraBank Project
+
+## Overview
+
+PeraBank is a data pipeline and machine learning project designed to process financial data, transform it through various stages (Bronze, Silver, Gold), and perform risk analysis using machine learning models.
+
+## Project Structure
+
+```
+├── .env                     # Environment variables
+├── .gitignore               # Git ignore file
+├── ArquitecturaPeraBank.png # Architecture diagram
+├── ArquitecturaPeraBank.xml # Architecture metadata
+├── README.md                # Project documentation
+├── requirements.txt         # Python dependencies
+├── lambda/                  # AWS Lambda functions
+│   ├── event_cuentas.py
+│   ├── event_destinatarios.py
+│   ├── event_prestamos.py
+│   ├── event_transacciones.py
+│   ├── event_usuarios.py
+│   ├── ProcessCuentasBronzeToSilver_Lambda.py
+│   ├── ProcessDestinatariosBronzeToSilver_Lambda.py
+│   ├── ProcessMlApiGateway.py
+│   ├── ProcessPrestamosBronzeToSilver_Lambda.py
+│   ├── ProcessTransaccionesBronzeToSilver_Lambda.py
+├── models/                  # Machine learning models and utilities
+│   ├── ml_peraback_data.py
+│   ├── ml_perabanck_official.py
+├── output_enhanced/         # Generated output data
+├── src/                     # Source code for data generation and processing
+│   ├── Perabank_Data.py
+```
+
+## Features
+
+- **Data Pipeline**: Processes data from Bronze (raw) to Silver (cleaned) and Gold (enriched) stages.
+- **AWS Integration**: Uses S3 for data storage and Lambda for processing.
+- **Machine Learning**: Implements a risk analysis pipeline using scikit-learn.
+- **Synthetic Data Generation**: Generates realistic financial data for testing.
+
+## Prerequisites
+
+- Python 3.8 or higher
+- AWS CLI configured with appropriate credentials
+- Required Python libraries (see `requirements.txt`)
+
+## Installation
+
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd Perabank
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Set up environment variables:
+   - Create a `.env` file in the root directory.
+   - Add AWS credentials and other required variables.
+
+## Usage
+
+### Data Generation
+Run the data generation script:
+```bash
+python src/Perabank_Data.py
+```
+
+### Local Testing
+Test Lambda functions locally:
+```bash
+python lambda/event_destinatarios.py
+```
+
+### Deployment
+Deploy Lambda functions and configure S3 buckets using AWS CLI or a CI/CD pipeline.
+
+## Contributing
+
+Contributions are welcome! Please fork the repository and submit a pull request.
+
+## License
+
+This project is licensed under the MIT License.

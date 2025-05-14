@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env
+venv 
+
+# AWS credentials and config
+*.env
+
+# Logs
+*.log
+logs/
+
+# Data files
+*.csv
+*.parquet
+*.joblib
+output_enhanced/
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Python egg files
+*.egg
+*.egg-info/
+dist/
+build/
+
+# S3 bucket data
+s3://*
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.swo
