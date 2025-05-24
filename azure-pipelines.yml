@@ -1,0 +1,81 @@
+trigger:
+- main # Se dispara con commits a la rama main
+
+pool:
+  vmImage: 'ubuntu-latest' # Agente hospedado por Microsoft
+
+variables:
+  pythonVersion: '3.9' # La versión de Python que usan tus Lambdas
+  awsRegion: 'us-east-1' # Tu región de AWS
+  s3DeploymentBucket: 'perabank-cicd-artifacts-xxxxxxx-us-east-1' # REEMPLAZA con tu bucket
+  samTemplateFile: 'template.yaml' # Asume que tu plantilla SAM está en la raíz
+  samOutputTemplateFile: 'packaged-template.yaml'
+  lambdaLayerDir: '$(Build.SourcesDirectory)/dist/lambda_layer' # Directorio temporal para construir la layer
+  lambdaLayerZipName: 'perabank_dependencies_layer.zip'
+
+steps:
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '$(pythonVersion)'
+  displayName: 'Use Python $(pythonVersion)'
+
+- script: |
+    python -m venv PeraBankVenv
+    source PeraBankVenv/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt # Instala dependencias para herramientas y pruebas locales si las tienes
+    # Instalar SAM CLI
+    pip install aws-sam-cli
+  displayName: 'Set up Python environment & Install SAM CLI'
+
+# Paso para construir la Lambda Layer (ejemplo para una capa común)
+- script: |
+    mkdir -p $(lambdaLayerDir)/python/lib/python$(pythonVersion)/site-packages
+    # Instala las dependencias de requirements.txt DENTRO de la estructura de la Layer
+    # Asegúrate que requirements.txt liste las dependencias para tus Lambdas (pandas, scikit-learn, joblib, pyarrow, unidecode)
+    pip install -r requirements.txt -t $(lambdaLayerDir)/python/lib/python$(pythonVersion)/site-packages/
+    # Crear el ZIP de la Layer
+    cd $(lambdaLayerDir)
+    zip -r $(Build.ArtifactStagingDirectory)/$(lambdaLayerZipName) python
+    cd $(Build.SourcesDirectory) # Volver al directorio fuente
+  displayName: 'Build Lambda Layer ZIP'
+  # Si tienes múltiples layers (ej. una para ETL, otra para Inferencia), repite o adapta este paso.
+
+# Empaquetar la aplicación SAM
+# Este paso asume que los CodeUri en tu template.yaml apuntan a rutas locales
+# (ej. CodeUri: ./lambda/ProcessUsersBronzeToSilver_Lambda/)
+# y que tu Layer tiene un ContentUri local (o lo defines para que SAM lo empaquete)
+# SAM build puede manejar la creación de los zips de las funciones Lambda si están estructuradas correctamente.
+- script: |
+    # Construir los artefactos de las funciones Lambda y la Layer si SAM los gestiona
+    # Esto crea zips individuales para cada función definida en template.yaml
+    # y la layer si su ContentUri es local y está definida como buildable.
+    # Asegúrate que template.yaml esté bien configurado para 'sam build'.
+    # Si construiste la layer manualmente arriba, tu template.yaml ya debería referenciarla
+    # como un zip que se subirá o que ya está en S3.
+    sam build --template $(samTemplateFile) --use-container # --use-container es buena práctica para consistencia
+  displayName: 'SAM Build'
+
+- script: |
+    # Empaqueta: Sube los artefactos construidos (Lambdas, Layers) a S3
+    # y genera un nuevo template (packaged-template.yaml) con las referencias S3.
+    sam package \
+      --template-file .aws-sam/build/template.yaml \ # Salida del 'sam build'
+      --output-template-file $(Build.ArtifactStagingDirectory)/$(samOutputTemplateFile) \
+      --s3-bucket $(s3DeploymentBucket) \
+      --s3-prefix perabank-sam-artifacts \
+      --region $(awsRegion)
+  displayName: 'SAM Package'
+  env: # Pasa las credenciales AWS a este script si usas la tarea de script genérica
+    AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID) # Variable secreta en Azure DevOps
+    AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY) # Variable secreta en Azure DevOps
+    AWS_DEFAULT_REGION: $(awsRegion)
+  # Alternativamente, usa la tarea "AWSShellScript" de la extensión AWS Toolkit
+  # que usa la Conexión de Servicio AWS.
+
+# Publicar la plantilla empaquetada para el Release Pipeline
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'PeraBankSAMApp'
+  displayName: 'Publish SAM Package Artifact'

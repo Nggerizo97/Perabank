@@ -1,0 +1,339 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  PeraBank Serverless Application.
+  Defines the ETL pipeline, ML inference API, and related resources.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: beta
+    Description: The deployment stage (e.g., beta, prod).
+  
+  # Nombres de los buckets S3 (asumiendo que los creas manualmente o en otro stack)
+  # Si los creas en este mismo template, serían recursos, no parámetros.
+  S3BucketBronzeName:
+    Type: String
+    Default: perabank-bronze-data-bank
+  S3BucketSilverName:
+    Type: String
+    Default: perabank-silver-data-bank
+  S3BucketGoldName:
+    Type: String
+    Default: perabank-gold-data-bank
+  S3MLArtifactsBucketName:
+    Type: String
+    Default: perabank-ml-artifacts-bank
+  
+  # Código fuente para Lambdas y Layers (S3)
+  # Tu pipeline CI/CD subirá los zips aquí y pasará estos nombres
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket where Lambda deployment zips are stored.
+  
+  ETLLambdaLayerZipS3Key: # Ej: layers/etl_layer.zip
+    Type: String
+  InferenceLambdaLayerZipS3Key: # Ej: layers/inference_layer.zip
+    Type: String
+  
+  ProcessUsersLambdaZipS3Key: # Ej: lambdas/process_users.zip
+    Type: String
+  # ... otros S3 Keys para cada Lambda zip ...
+  PrepareGoldLambdaZipS3Key:
+    Type: String
+  InferenceLambdaZipS3Key:
+    Type: String
+
+  StepFunctionsASLS3Key: # Ej: statemachines/perabank_etl.asl.json
+    Type: String
+
+  ModelS3Key: # Ej: models/perabank_risk_pipeline_v1.joblib
+    Type: String
+    Default: models/perabank_risk_pipeline_v1.joblib
+
+
+Globals: # Configuraciones globales para funciones SAM
+  Function:
+    Runtime: python3.9 # O la versión que estés usando consistentemente
+    Timeout: 180 # Default timeout de 3 minutos, ajusta según necesites
+    MemorySize: 512 # Default memoria, ajusta
+    Architectures: [x86_64] # o arm64
+    Environment:
+      Variables:
+        BRONZE_BUCKET: !Ref S3BucketBronzeName
+        SILVER_BUCKET: !Ref S3BucketSilverName
+        GOLD_BUCKET: !Ref S3BucketGoldName
+        ML_ARTIFACTS_BUCKET: !Ref S3MLArtifactsBucketName
+        # Otras variables comunes si las hay
+
+Resources:
+  # --- 1. Roles IAM ---
+  PeraBankETLLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PeraBankETLLambdaS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ["s3:GetObject"]
+                Resource: !Sub "arn:aws:s3:::${S3BucketBronzeName}/*"
+              - Effect: Allow
+                Action: ["s3:GetObject"] # Para leer de Plata si es necesario
+                Resource: !Sub "arn:aws:s3:::${S3BucketSilverName}/*"
+              - Effect: Allow
+                Action: ["s3:PutObject", "s3:PutObjectAcl"]
+                Resource: 
+                  - !Sub "arn:aws:s3:::${S3BucketSilverName}/*"
+                  - !Sub "arn:aws:s3:::${S3BucketGoldName}/*"
+              - Effect: Allow # Permisos para ListBucket
+                Action: ["s3:ListBucket"]
+                Resource: 
+                  - !Sub "arn:aws:s3:::${S3BucketBronzeName}"
+                  - !Sub "arn:aws:s3:::${S3BucketSilverName}"
+        - PolicyName: PeraBankLambdaBasicExecution
+          PolicyDocument: # Permisos para logs en CloudWatch
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: "arn:aws:logs:*:*:*"
+
+  PeraBankInferenceLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: # Similar al anterior
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: PeraBankInferenceLambdaS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ["s3:GetObject"]
+                Resource: !Sub "arn:aws:s3:::${S3MLArtifactsBucketName}/${ModelS3Key}"
+        - PolicyName: PeraBankLambdaBasicExecution # Reutiliza o crea una política similar
+          PolicyDocument: { Version: '2012-10-17', Statement: [{Effect: Allow, Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource: "arn:aws:logs:*:*:*"}]}
+
+  PeraBankStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: !Sub "states.${AWS::Region}.amazonaws.com"}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PeraBankStepFunctionsLambdaInvoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: "lambda:InvokeFunction"
+                Resource: "*" # Sé más específico listando los ARNs de tus Lambdas ETL
+                              # Ej: [!GetAtt ProcessUsersBronzeToSilverLambda.Arn, !GetAtt PrepareGoldLambda.Arn, ...]
+
+  PeraBankGlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: glue.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies: # Permisos adicionales para S3
+        - PolicyName: PeraBankGlueS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject"] # PutObject si el crawler actualiza particiones
+                Resource: 
+                  - !Sub "arn:aws:s3:::${S3BucketBronzeName}/*"
+                  - !Sub "arn:aws:s3:::${S3BucketSilverName}/*"
+                  - !Sub "arn:aws:s3:::${S3BucketGoldName}/*"
+              - Effect: Allow
+                Action: ["s3:ListBucket"]
+                Resource: 
+                  - !Sub "arn:aws:s3:::${S3BucketBronzeName}"
+                  - !Sub "arn:aws:s3:::${S3BucketSilverName}"
+                  - !Sub "arn:aws:s3:::${S3BucketGoldName}"
+
+  # --- 2. Lambda Layers ---
+  ETLLambdaDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: PeraBankETLDependencies
+      Description: Dependencias para Lambdas ETL (pandas, pyarrow, unidecode)
+      ContentUri: 
+        Bucket: !Ref LambdaCodeS3Bucket
+        Key: !Ref ETLLambdaLayerZipS3Key
+      CompatibleRuntimes: [!Ref "AWS::LanguageExtensions"] # o python3.9, etc.
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain # Para mantener versiones antiguas
+
+  InferenceLambdaDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: PeraBankInferenceDependencies
+      Description: Dependencias para Lambda de Inferencia (scikit-learn, pandas, joblib)
+      ContentUri: 
+        Bucket: !Ref LambdaCodeS3Bucket
+        Key: !Ref InferenceLambdaLayerZipS3Key
+      CompatibleRuntimes: [!Ref "AWS::LanguageExtensions"]
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain
+      
+  # --- 3. Glue Data Catalog ---
+  PeraBankBronzeDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub "perabank_bronze_db_${StageName}"
+        Description: "Base de datos para datos crudos de PeraBank (Bronce)"
+
+  # ... (Puedes definir perabank_silver_db, perabank_gold_db de forma similar) ...
+  
+  # Los Crawlers son un poco más complicados de definir completamente en CFN porque
+  # a menudo se configuran y ejecutan después de que los datos existen.
+  # Pero puedes definir su estructura básica:
+  UsuariosBronzeCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "PeraBankUsuariosBronzeCrawler_${StageName}"
+      Role: !GetAtt PeraBankGlueCrawlerRole.Arn
+      DatabaseName: !Ref PeraBankBronzeDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${S3BucketBronzeName}/usuarios/"
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG" # o DEPRECATE_IN_DATABASE
+      # Configuration: '{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}'
+      # Schedule: (Opcional, para tu beta probablemente lo corras manual)
+      
+  # --- 4. Funciones Lambda de ETL ---
+  ProcessUsersBronzeToSilverLambda: # Nombre lógico del recurso en CloudFormation/SAM
+    Type: AWS::Serverless::Function # SAM simplifica la definición de Lambda
+    Properties:
+      FunctionName: !Sub "PeraBank-ProcessUsersB2S-${StageName}"
+      Handler: lambda_function.lambda_handler # Asume que tu script se llama lambda_function.py
+      CodeUri:
+        Bucket: !Ref LambdaCodeS3Bucket
+        Key: !Ref ProcessUsersLambdaZipS3Key
+      Role: !GetAtt PeraBankETLLambdaRole.Arn
+      Layers:
+        - !Ref ETLLambdaDependenciesLayer
+      # Environment: # Ya definidos en Globals, pero puedes sobreescribir o añadir aquí
+      #   Variables:
+      #     SPECIFIC_CONFIG: "value_for_users_lambda"
+      # Events: # Si quieres que se dispare por S3 directamente, en lugar de Step Functions
+      #   S3Trigger:
+      #     Type: S3
+      #     Properties:
+      #       Bucket: !Ref S3BucketBronzeName
+      #       Events: s3:ObjectCreated:*
+      #       Filter: {S3Key: {Rules: [{Name: prefix, Value: "usuarios/"}]}}
+
+  # ... Define las otras Lambdas de ETL (CuentasB2S, TransaccionesB2S, etc., y PrepareGoldLambda) de forma similar ...
+  
+  PrepareGoldLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "PeraBank-PrepareGoldLayer-${StageName}"
+      Handler: lambda_function.lambda_handler # El handler de tu script para la capa Oro
+      CodeUri: 
+        Bucket: !Ref LambdaCodeS3Bucket
+        Key: !Ref PrepareGoldLambdaZipS3Key
+      Role: !GetAtt PeraBankETLLambdaRole.Arn # Podrías necesitar permisos adicionales si lee de varios lugares
+      Layers: [!Ref ETLLambdaDependenciesLayer]
+      Timeout: 600 # Puede necesitar más tiempo
+      MemorySize: 1024 # Puede necesitar más memoria
+
+  # --- 5. Máquina de Estados de Step Functions ---
+  PeraBankETLStateMachine:
+    Type: AWS::Serverless::StateMachine # SAM simplifica Step Functions
+    Properties:
+      Name: !Sub "PeraBankETLStateMachine-${StageName}"
+      DefinitionUri: # Tu archivo ASL (Amazon States Language) JSON/YAML subido a S3 por el pipeline
+        Bucket: !Ref LambdaCodeS3Bucket 
+        Key: !Ref StepFunctionsASLS3Key
+      # Alternativamente, DefinitionString para ASL inline (más difícil de mantener)
+      # DefinitionSubstitutions: # Para pasar ARNs de Lambdas a tu ASL
+      #   ProcessUsersLambdaArn: !GetAtt ProcessUsersBronzeToSilverLambda.Arn
+      #   PrepareGoldLambdaArn: !GetAtt PrepareGoldLambda.Arn
+      #   ... etc. ...
+      Role: !GetAtt PeraBankStepFunctionsRole.Arn
+      # Policies: Si necesitas definir permisos específicos para la máquina de estados aquí
+
+  # --- 6. Lambda de Inferencia ---
+  PeraBankInferenceLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "PeraBank-Inference-${StageName}"
+      Handler: lambda_function.lambda_handler # El handler de tu script de inferencia
+      CodeUri:
+        Bucket: !Ref LambdaCodeS3Bucket
+        Key: !Ref InferenceLambdaZipS3Key
+      Role: !GetAtt PeraBankInferenceLambdaRole.Arn
+      Layers:
+        - !Ref InferenceLambdaDependenciesLayer
+      Environment:
+        Variables:
+          MODEL_BUCKET: !Ref S3MLArtifactsBucketName 
+          MODEL_KEY: !Ref ModelS3Key 
+          # Otras variables que tu Lambda de inferencia necesite
+
+  # --- 7. API Gateway ---
+  PeraBankPredictionApi:
+    Type: AWS::Serverless::Api # SAM simplifica API Gateway
+    Properties:
+      Name: !Sub "PeraBankPredictionApi-${StageName}"
+      StageName: !Ref StageName # Usa el parámetro StageName
+      Cors: # Configuración básica de CORS
+        AllowMethods: "'POST,OPTIONS'" # Métodos permitidos
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'" # ¡RESTRINGE ESTO EN PRODUCCIÓN!
+      # Auth: # Opcional: Configurar autorización (ej. API Key)
+      #   ApiKeyRequired: true 
+      #   UsagePlan:
+      #     CreateUsagePlan: PER_API # o SHARED
+      #     UsagePlanName: !Sub "PeraBankApiUsagePlan-${StageName}"
+      #     Quota: {Limit: 1000, Period: DAY}
+      #     Throttle: {RateLimit: 10, BurstLimit: 5}
+
+  # Añadir el path y método a la Lambda de Inferencia para conectarla al API Gateway
+  # Esto se hace DENTRO de la definición de PeraBankInferenceLambda usando la sección Events:
+  # PeraBankInferenceLambda:
+  #   ... (propiedades anteriores) ...
+  #   Events:
+  #     PredictApiEvent:
+  #       Type: Api # Esto lo conecta a una API de SAM
+  #       Properties:
+  #         Path: /prediccion-riesgo # La ruta de tu endpoint
+  #         Method: post
+  #         RestApiId: !Ref PeraBankPredictionApi # Referencia a la API creada arriba
+
+Outputs:
+  PeraBankApiEndpointURL:
+    Description: "URL del endpoint de API Gateway para predicciones de PeraBank"
+    Value: !Sub "https://${PeraBankPredictionApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/prediccion-riesgo"
+  
+  ETLStateMachineArn:
+    Description: "ARN de la Máquina de Estados de Step Functions para el ETL"
+    Value: !Ref PeraBankETLStateMachine
+
+  # ... otros outputs que necesites (ej. ARNs de Lambdas, nombres de buckets) ...
