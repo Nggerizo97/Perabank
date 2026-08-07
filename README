@@ -1,88 +1,96 @@
-# PeraBank Project
+# PeraBank
 
-## Overview
+Proyecto de datos e ML de un banco simulado. No es una aplicación en producción: es una
+pieza de portafolio para demostrar ingeniería de datos y ML de nivel senior, sin
+generar datos aleatorios como sustituto de datos reales.
 
-PeraBank is a data pipeline and machine learning project designed to process financial data, transform it through various stages (Bronze, Silver, Gold), and perform risk analysis using machine learning models.
+## Antes vs. ahora
 
-## Project Structure
+El proyecto se reestructuró completo. La tabla resume qué cambió y por qué.
+
+| | Antes | Ahora |
+|---|---|---|
+| **Datos** | Generados con Faker en `src/Perabank_Data.py` (nombres, montos y comportamiento inventados) | 4 datasets públicos reales (PaySim, UCI Bank Marketing, transacciones bancarias indias, ULB Credit Card Fraud) + 3 fuentes externas reales vía API (Yahoo Finance, BCE/Frankfurter, datos.gov.co) |
+| **Capas** | Bronze/Silver/Gold conceptual, sin contratos ni validación | `etl/` con un `SilverTransform` por fuente, contratos de columnas en `schemas/*.py` que **fallan la corrida** si falta una columna, y `assert_quality()` validando duplicados, nulos e integridad referencial en cada capa |
+| **Modelo Gold** | Tablas planas por entidad (usuarios, cuentas, transacciones, prestamos, destinatarios) | Modelo dimensional **copo de nieve** en SQLite (`perabank.db`): 11 tablas (6 dimensiones, 5 hechos), miembro `DESCONOCIDO` para relaciones no existentes en los datos, muestreo determinístico compartido entre dimensiones y hechos |
+| **ML de riesgo** | Un modelo sobre features simuladas (`ingreso_mensual_estimado`, `antiguedad_cliente` generados con `np.random`) | 3 modelos independientes por grano real (crédito, fraude, factoring estatal), sin unir fuentes que no comparten identidad, con exclusión explícita de columnas que producían fuga de datos |
+| **Segmentación** | No existía | Clustering no supervisado en 3 dominios (retail, proveedores, transaccional), con exclusión de atributos protegidos del entrenamiento y auditoría de sesgo posterior (regla de los cuatro quintos) |
+| **App** | Streamlit leyendo `output_enhanced/usuarios.csv` (CSV plano) | Streamlit con 6 tabs leyendo directo de `perabank.db` vía SQL cacheado, sobre los índices de la capa gold |
+| **Explicación de riesgo** | Gemini (API de Google, requería `API_KEY`) | Ollama local (`qwen2.5:3b`) — sin credenciales que rotar, sin enviar perfiles de clientes a un tercero |
+| **Despliegue AWS** | Lambdas (`lambda/Process*_Lambda.py`) + SAM (`IAC/template.yaml`) + pipeline de Azure DevOps apuntando a AWS real | Arquitectura serverless completa (S3, SQS FIFO+DLQ, DynamoDB, Lambda, API Gateway, IAM de privilegio mínimo) simulada localmente con Floci/moto — verificada extremo a extremo, con modelo de costo real (`IAC/cost_model.py`) antes de tocar una cuenta de AWS |
+| **Diagrama** | `ArquitecturaPeraBank.png` (arquitectura vieja) | `ArquitecturaPeraBankV2.svg` (arquitectura actual, con la simulación cloud marcada explícitamente como referencia no conectada) |
+
+Todo lo de la columna "Antes" que quedó obsoleto se borró del repo (recuperable en el
+historial de git con `git log -- <ruta>`); lo único que sigue en disco sin usarse es
+`output_enhanced/*.csv`, ignorado por git.
+
+## Arquitectura actual
+
+![Arquitectura](ArquitecturaPeraBankV2.svg)
+
+Ver también [IAC/VERIFICATION_REPORT.md](IAC/VERIFICATION_REPORT.md) para el detalle
+verificado de la simulación cloud (qué se probó, qué no, y el hallazgo de costo).
+
+## Estructura del proyecto
 
 ```
-├── .env                     # Environment variables
-├── .gitignore               # Git ignore file
-├── ArquitecturaPeraBank.png # Architecture diagram
-├── ArquitecturaPeraBank.xml # Architecture metadata
-├── README.md                # Project documentation
-├── requirements.txt         # Python dependencies
-├── lambda/                  # AWS Lambda functions
-│   ├── event_cuentas.py
-│   ├── event_destinatarios.py
-│   ├── event_prestamos.py
-│   ├── event_transacciones.py
-│   ├── event_usuarios.py
-│   ├── ProcessCuentasBronzeToSilver_Lambda.py
-│   ├── ProcessDestinatariosBronzeToSilver_Lambda.py
-│   ├── ProcessMlApiGateway.py
-│   ├── ProcessPrestamosBronzeToSilver_Lambda.py
-│   ├── ProcessTransaccionesBronzeToSilver_Lambda.py
-├── models/                  # Machine learning models and utilities
-│   ├── ml_peraback_data.py
-│   ├── ml_perabanck_official.py
-├── output_enhanced/         # Generated output data
-├── src/                     # Source code for data generation and processing
-│   ├── Perabank_Data.py
+├── datalake/                      # CSV crudos (fuera del repo, en la carpeta padre)
+├── etl/
+│   ├── bronze/                    # Ingesta cruda + contrato de columnas
+│   ├── enrichment/                # Fuentes externas reales (FX, TRM, SECOP...)
+│   ├── silver/                    # Limpieza por fuente (SilverTransform)
+│   ├── gold/                      # Modelo dimensional copo de nieve
+│   ├── common/                    # Config, logging, validaciones compartidas
+│   └── run_pipeline.py            # Orquestador: bronze → enrichment → silver → gold → clustering
+├── schemas/                       # Contratos de columnas por capa (bronze/silver/gold)
+├── models/
+│   ├── ml_perabanck_official.py   # 3 modelos de riesgo (credit/fraud/factoring)
+│   └── ml_clustering_pipeline.py  # Segmentación no supervisada (3 dominios)
+├── lambda/
+│   ├── lambda_etl_trigger.py      # Handler: aterriza transacciones en S3 bronze
+│   └── lambda_risk_scorer.py      # Handler: scoring en tiempo real
+├── IAC/                           # Infraestructura como código (simulación AWS local)
+│   ├── deploy_local_cloud.py      # Orquestador de todo el despliegue
+│   ├── verify_floci.py            # Diagnóstico del emulador
+│   ├── simulate_pipeline.py       # Prueba end-to-end
+│   └── cost_model.py              # Estimación de costo en AWS real
+├── streamlit_app.py                # App: portafolio, mercado, tasas, factoring, segmentación, scoring
+├── perabank_risk_pipeline_v1.joblib
+└── data/                          # bronze/silver/gold en parquet + perabank.db (gitignored)
 ```
 
-## Features
+## Cómo correr todo
 
-- **Data Pipeline**: Processes data from Bronze (raw) to Silver (cleaned) and Gold (enriched) stages.
-- **AWS Integration**: Uses S3 for data storage and Lambda for processing.
-- **Machine Learning**: Implements a risk analysis pipeline using scikit-learn.
-- **Synthetic Data Generation**: Generates realistic financial data for testing.
-
-## Prerequisites
-
-- Python 3.8 or higher
-- AWS CLI configured with appropriate credentials
-- Required Python libraries (see `requirements.txt`)
-
-## Installation
-
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd Perabank
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Set up environment variables:
-   - Create a `.env` file in the root directory.
-   - Add AWS credentials and other required variables.
-
-## Usage
-
-### Data Generation
-Run the data generation script:
 ```bash
-python src/Perabank_Data.py
+pip install -r requirements.txt
+
+# Pipeline completo: bronze -> enriquecimiento -> silver -> gold -> clustering
+python -m etl.run_pipeline
+
+# Entrenar los modelos de riesgo (credit / fraud / factoring)
+python models/ml_perabanck_official.py
+
+# App
+streamlit run streamlit_app.py
 ```
 
-### Local Testing
-Test Lambda functions locally:
+Para la simulación cloud (opcional, no requerida por el pipeline local):
+
 ```bash
-python lambda/event_destinatarios.py
+python -m moto.server -p 4566      # o: floci start (requiere Docker)
+python -m IAC.verify_floci
+python -m IAC.deploy_local_cloud
+python -m IAC.simulate_pipeline
 ```
 
-### Deployment
-Deploy Lambda functions and configure S3 buckets using AWS CLI or a CI/CD pipeline.
+## Requisitos
 
-## Contributing
+- Python 3.11+
+- [Ollama](https://ollama.com) corriendo en local con `qwen2.5:3b` descargado, para las
+  explicaciones de riesgo en la app (opcional: sin Ollama, la app cae a una explicación
+  por reglas)
+- Docker, solo si se quiere correr la simulación cloud contra Floci real en vez de moto
 
-Contributions are welcome! Please fork the repository and submit a pull request.
+## Licencia
 
-## License
-
-This project is licensed under the MIT License.
+MIT.

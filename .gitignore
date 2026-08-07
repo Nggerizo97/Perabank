@@ -6,20 +6,24 @@ __pycache__/
 
 # Virtual environment
 venv/
-.env
-venv 
 
-# AWS credentials and config
+# Credentials and secrets
+.env
 *.env
 
 # Logs
 *.log
 logs/
 
-# Data files
+# ETL/ML output — data/ holds bronze/silver/gold parquet + perabank.db,
+# regenerated locally with `python -m etl.run_pipeline`. Model artifacts
+# (perabank_risk_pipeline_v1.joblib, models/*.joblib) are regenerated with
+# `python models/ml_perabanck_official.py` and ml_clustering_pipeline.py.
+data/
 *.csv
 *.parquet
 *.joblib
+*.db
 output_enhanced/
 
 # IDE-specific files
@@ -35,9 +39,6 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
-
-# S3 bucket data
-s3://*
 
 # Temporary files
 *.tmp

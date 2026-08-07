@@ -1,220 +1,265 @@
-import boto3
-import pandas as pd
-import io
+"""Entrenamiento de los modelos de riesgo de PeraBank contra el warehouse Gold (SQLite).
+
+Se entrenan TRES modelos, uno por grano real de datos. No se unen entre sí porque las
+fuentes no comparten identidad de cliente: unir un proveedor del SECOP con un cliente
+de campaña de depósitos sería inventar una relación que no existe en los datos.
+
+  1. credit    -> riesgo de mora minorista   (dim_cliente + fact_campana_marcado + macro)
+  2. fraud     -> fraude transaccional tarjeta (fact_fraude_tarjeta, componentes PCA)
+  3. factoring -> cumplimiento de pago estatal (dim_proveedor_estatal + fact_contrato_estatal)
+
+Los tres se guardan en un único artefacto joblib como diccionario, junto con el esquema
+de features que la app de Streamlit usa para construir sus formularios.
+"""
+from datetime import datetime, timezone
 import logging
-from datetime import datetime 
-import unidecode 
-from dotenv import load_dotenv
 import os
-from urllib.parse import urlparse
-import numpy as np # Asegúrate de tener este import para np.select
-import json # Asegúrate de tener este import para json.dumps en el return de Lambda (si este código fuera parte de una Lambda)
+import sqlite3
+import sys
+from pathlib import Path
 
-# --- TU CÓDIGO DE CONFIGURACIÓN INICIAL (logger, .env, buckets, get_s3_client, etc.) ---
-# ... (Pega aquí todo tu bloque de configuración y funciones de ayuda: 
-#      logger, carga de .env, nombres de buckets, get_s3_client, 
-#      generate_s3_output_path, load_parquet_from_s3) ...
-# --- Por ejemplo: ---
-logger = logging.getLogger()
-logger.setLevel(logging.INFO) 
-try:
-    env_path_current_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-    env_path_parent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
-    if os.path.exists(env_path_current_dir): env_path = env_path_current_dir
-    elif os.path.exists(env_path_parent_dir): env_path = env_path_parent_dir
-    else: env_path = None
-    if env_path:
-        logger.info(f"Cargando .env desde: {env_path}")
-        load_dotenv(env_path)
-    else:
-        logger.info("Archivo .env no encontrado, asumiendo credenciales globales o rol IAM.")
-except Exception as e:
-    logger.info(f"No se pudo cargar .env: {e}")
+import joblib
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import (
+    average_precision_score,
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+)
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-GOLD_BUCKET = os.getenv('AWS_S3_BUCKET_GOLD', 'perabank-gold-data-bank')
-ML_ARTIFACTS_BUCKET = os.getenv('AWS_S3_BUCKET_ML', 'perabank-ml-artifacts-bank') 
-# Asegúrate que ML_ARTIFACTS_BUCKET esté definido en tu .env o aquí como default.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
-def get_s3_client():
-    # ... (tu función get_s3_client)
-    if 'AWS_LAMBDA_FUNCTION_NAME' in os.environ:
-        return boto3.client('s3')
-    else:
-        return boto3.client(
-            's3',
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.getenv('AWS_REGION', 'us-east-1')
-        )
+DB_PATH = REPO_ROOT / "data" / "perabank.db"
+MODEL_PATH = REPO_ROOT / "perabank_risk_pipeline_v1.joblib"
 
-def load_parquet_from_s3(s3_client, bucket_name, file_key):
-    # ... (tu función load_parquet_from_s3)
-    s3_path = f"s3://{bucket_name}/{file_key}"
-    logger.info(f"Intentando leer Parquet desde: {s3_path}")
-    try:
-        obj = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-        df = pd.read_parquet(io.BytesIO(obj['Body'].read()), engine='pyarrow')
-        logger.info(f"Datos de '{file_key}' cargados. Dimensiones: {df.shape}")
-        return df
-    except Exception as e:
-        logger.error(f"ERROR al leer el archivo Parquet '{s3_path}': {e}", exc_info=True)
-        return pd.DataFrame()
-# --- FIN DE TU CÓDIGO DE CONFIGURACIÓN INICIAL ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("perabank.ml")
+
+load_dotenv(REPO_ROOT / ".env")
+RANDOM_STATE = 42
 
 
-# --- SCRIPT PRINCIPAL (Continuación después de la carga de datos y preparación de df_final_ml_dataset) ---
-if __name__ == "__main__":
-    logger.info("--- Iniciando script de carga de datos S3 Gold y entrenamiento de ML (Local) ---")
-    
-    s3 = get_s3_client()
+# ---------------------------------------------------------------------------
+# Construcción de datasets, uno por grano
+# ---------------------------------------------------------------------------
 
-    keys_gold = {
-        "usuarios": "usuarios/usuarios_enriched.parquet",
-        "cuentas": "cuentas/cuentas_enriched.parquet",
-        "transacciones": "transacciones/transacciones_enriched.parquet",
-        "prestamos": "prestamos/prestamos_enriched.parquet",
-        "destinatarios": "destinatarios/destinatarios_enriched.parquet"
+def _query(sql: str) -> pd.DataFrame:
+    with sqlite3.connect(DB_PATH) as conn:
+        return pd.read_sql(sql, conn)
+
+
+def build_credit_dataset() -> tuple:
+    """Riesgo de mora minorista. Join real vía sk_cliente y sk_fecha.
+
+    Se EXCLUYEN a propósito spread_tasa_credito y tasa_oferta_estimada: la capa gold
+    las deriva de tiene_mora, así que usarlas como features sería fuga del target
+    (el modelo leería la respuesta en la pregunta y daría un AUC irreal de ~1.0).
+    """
+    df = _query("""
+        SELECT c.edad, c.ocupacion, c.estado_civil, c.nivel_educativo,
+               f.balance_eur, f.tiene_hipoteca, f.tiene_prestamo_personal,
+               f.duracion_contacto_seg, f.resultado_previo,
+               f.tasa_ibr_referencia, f.suscrito_deposito,
+               f.tiene_mora
+        FROM fact_campana_marcado f
+        JOIN dim_cliente c ON c.sk_cliente = f.sk_cliente
+    """)
+
+    # Contexto macro real del warehouse: promedio de los benchmarks de tesorería.
+    macro = _query("""
+        SELECT tipo_tasa, AVG(valor_tasa) AS valor
+        FROM fact_tasas_mercado
+        WHERE tipo_tasa IN ('TREASURY_10Y', 'TBILL_3M')
+        GROUP BY tipo_tasa
+    """).set_index("tipo_tasa")["valor"]
+    df["tasa_treasury_10y"] = macro.get("TREASURY_10Y", np.nan)
+    df["tasa_tbill_3m"] = macro.get("TBILL_3M", np.nan)
+
+    y = df.pop("tiene_mora").astype(int)
+    categoricas = ["ocupacion", "estado_civil", "nivel_educativo", "resultado_previo"]
+    numericas = [c for c in df.columns if c not in categoricas]
+    return df, y, numericas, categoricas
+
+
+def build_fraud_dataset() -> tuple:
+    """Fraude con tarjeta. Los componentes PCA V1..V28 son la señal predictiva real."""
+    df = _query("SELECT * FROM fact_fraude_tarjeta")
+    df = df.drop(columns=["id_evento_tarjeta", "source_system"], errors="ignore")
+
+    y = df.pop("es_fraude").astype(int)
+    categoricas = ["banda_riesgo_macro"]
+    numericas = [c for c in df.columns if c not in categoricas]
+    return df, y, numericas, categoricas
+
+
+def build_factoring_dataset() -> tuple:
+    """Cumplimiento de pago en contratación estatal, para calificar factoring.
+
+    Target: el contrato superó el 50% de ejecución de pago.
+    Se EXCLUYEN valor_pagado y valor_pendiente: ambos definen el target aritméticamente.
+    """
+    df = _query("""
+        SELECT f.id_contrato, f.sk_proveedor, f.valor_del_contrato, f.valor_pagado,
+               f.departamento, f.estado_contrato, f.tipo_de_contrato,
+               f.modalidad_de_contratacion, p.es_pyme
+        FROM fact_contrato_estatal f
+        JOIN dim_proveedor_estatal p ON p.sk_proveedor = f.sk_proveedor
+        WHERE f.valor_del_contrato > 0
+    """)
+
+    # Volumen de contratación por proveedor: señal legítima de trayectoria.
+    volumen = df.groupby("sk_proveedor")["id_contrato"].transform("count")
+    df["contratos_del_proveedor"] = volumen
+
+    ratio = (df["valor_pagado"] / df["valor_del_contrato"]).clip(0, 1)
+    y = (ratio >= 0.5).astype(int)
+
+    df = df.drop(columns=["id_contrato", "sk_proveedor", "valor_pagado"])
+    categoricas = ["departamento", "estado_contrato", "tipo_de_contrato", "modalidad_de_contratacion"]
+    numericas = [c for c in df.columns if c not in categoricas]
+    return df, y, numericas, categoricas
+
+
+# ---------------------------------------------------------------------------
+# Entrenamiento y evaluación
+# ---------------------------------------------------------------------------
+
+def train_model(nombre: str, X: pd.DataFrame, y: pd.Series,
+                numericas: list, categoricas: list) -> dict:
+    logger.info("=" * 70)
+    logger.info("Modelo '%s': %s filas, %s features (%s num / %s cat)",
+                nombre, len(X), X.shape[1], len(numericas), len(categoricas))
+    logger.info("Distribución del target: %s", dict(y.value_counts()))
+
+    if y.nunique() < 2:
+        logger.error("Modelo '%s' omitido: el target tiene una sola clase.", nombre)
+        return {}
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", Pipeline([
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler()),
+            ]), numericas),
+            ("cat", Pipeline([
+                ("imputer", SimpleImputer(strategy="most_frequent")),
+                ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+            ]), categoricas),
+        ],
+        remainder="drop",
+    )
+
+    pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(
+            n_estimators=300,
+            min_samples_leaf=2,
+            random_state=RANDOM_STATE,
+            class_weight="balanced_subsample",
+            n_jobs=-1,
+        )),
+    ])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.25, random_state=RANDOM_STATE, stratify=y
+    )
+    pipeline.fit(X_train, y_train)
+
+    proba = pipeline.predict_proba(X_test)[:, 1]
+    pred = pipeline.predict(X_test)
+
+    roc_auc = roc_auc_score(y_test, proba)
+    pr_auc = average_precision_score(y_test, proba)
+    matriz = confusion_matrix(y_test, pred)
+
+    logger.info("ROC-AUC: %.4f | PR-AUC: %.4f (baseline PR = %.4f)",
+                roc_auc, pr_auc, y_test.mean())
+    logger.info("Matriz de confusión:\n%s", matriz)
+    logger.info("Reporte:\n%s", classification_report(y_test, pred, zero_division=0))
+
+    importancias = _feature_importances(pipeline)
+    logger.info("Top 10 features:\n%s", importancias.head(10).to_string())
+
+    return {
+        "pipeline": pipeline,
+        "features": {"numericas": numericas, "categoricas": categoricas},
+        "categorias": {c: sorted(X[c].dropna().astype(str).unique().tolist()) for c in categoricas},
+        "defaults": _defaults(X, numericas),
+        "metricas": {
+            "roc_auc": float(roc_auc),
+            "pr_auc": float(pr_auc),
+            "baseline_pr": float(y_test.mean()),
+            "confusion_matrix": matriz.tolist(),
+            "n_filas": int(len(X)),
+            "positivos": int(y.sum()),
+        },
+        "importancias": importancias.to_dict(),
     }
-    dataframes_gold = {}
-    for entity_name, entity_key in keys_gold.items():
-        df = load_parquet_from_s3(s3, GOLD_BUCKET, entity_key)
-        if df.empty: logger.warning(f"DataFrame para '{entity_name}' está vacío.")
-        dataframes_gold[entity_name] = df
 
-    # --- TU LÓGICA DE UNIÓN Y AGREGACIÓN PARA CREAR df_final_ml_dataset ---
-    # ... (Asegúrate que este bloque de código se ejecute y df_final_ml_dataset se popule correctamente) ...
-    logger.info("\n--- Iniciando el proceso de unión y agregación de DataFrames (SIMULADO) ---")
-    # Ejemplo simplificado: asume que df_usuarios_gold es la base y ya tiene todo lo necesario
-    # DEBES REEMPLAZAR ESTO CON TU LÓGICA DE UNIÓN COMPLETA
-    if not dataframes_gold.get("usuarios", pd.DataFrame()).empty:
-        df_final_ml_dataset = dataframes_gold["usuarios"].copy() 
-        # Simulación de algunas columnas necesarias para el ejemplo de target y preprocesador
-        # ASEGÚRATE QUE ESTAS COLUMNAS EXISTAN REALMENTE DESPUÉS DE TU UNIÓN
-        if 'ingreso_mensual_estimado' not in df_final_ml_dataset.columns: df_final_ml_dataset['ingreso_mensual_estimado'] = np.random.rand(len(df_final_ml_dataset)) * 10000000
-        if 'antiguedad_cliente' not in df_final_ml_dataset.columns: df_final_ml_dataset['antiguedad_cliente'] = np.random.randint(1, 10, len(df_final_ml_dataset))
-        if 'estado_laboral' not in df_final_ml_dataset.columns: df_final_ml_dataset['estado_laboral'] = np.random.choice(['EMPLEADO', 'DESEMPLEADO', 'ESTUDIANTE'], len(df_final_ml_dataset))
-        if 'num_total_prestamos' not in df_final_ml_dataset.columns: df_final_ml_dataset['num_total_prestamos'] = np.random.randint(0, 3, len(df_final_ml_dataset))
-        if 'edad' not in df_final_ml_dataset.columns: df_final_ml_dataset['edad'] = np.random.randint(18, 70, len(df_final_ml_dataset))
-        # ... añade otras columnas simuladas si tu lógica de abajo las necesita y no vienen de la unión ...
-        logger.info(f"Dataset inicial para ML (posiblemente simulado/incompleto): {df_final_ml_dataset.shape}")
-    else:
-        logger.error("Datos de usuarios vacíos, no se puede continuar con el modelado.")
-        exit() # Salir si no hay datos base
 
-    # --- 1. CREACIÓN DE LA VARIABLE OBJETIVO (TARGET) ---
-    # Mantén tu lógica de creación de 'riesgo' aquí
-    if not df_final_ml_dataset.empty:
-        condiciones_alto_riesgo = [
-            (df_final_ml_dataset['ingreso_mensual_estimado'] < 1500000) & (df_final_ml_dataset['antiguedad_cliente'] < 2),
-            (df_final_ml_dataset['estado_laboral'].isin(['DESEMPLEADO', 'ESTUDIANTE'])) & (df_final_ml_dataset['num_total_prestamos'] > 0),
-            (df_final_ml_dataset['ingreso_mensual_estimado'] < 2000000) & (df_final_ml_dataset['num_total_prestamos'] > 1),
-            (df_final_ml_dataset['edad'] < 22) & (df_final_ml_dataset['ingreso_mensual_estimado'] == 0)
-        ]
-        opciones_riesgo = [1] * len(condiciones_alto_riesgo)
-        df_final_ml_dataset['riesgo'] = np.select(condiciones_alto_riesgo, opciones_riesgo, default=0)
-        print("\nDistribución de la variable objetivo 'riesgo':")
-        print(df_final_ml_dataset['riesgo'].value_counts(normalize=True))
-    else:
-        logger.error("df_final_ml_dataset está vacío antes de crear la variable objetivo.")
-        exit()
-    
-    # --- Importaciones para el modelo ---
-    from sklearn.model_selection import train_test_split
-    from sklearn.compose import ColumnTransformer
-    from sklearn.preprocessing import StandardScaler, OneHotEncoder
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, roc_auc_score
-    from sklearn.pipeline import Pipeline
-    import joblib
+def _feature_importances(pipeline: Pipeline) -> pd.Series:
+    nombres = pipeline.named_steps["preprocessor"].get_feature_names_out()
+    valores = pipeline.named_steps["classifier"].feature_importances_
+    return pd.Series(valores, index=nombres).sort_values(ascending=False)
 
-    # --- 2. SELECCIÓN DE CARACTERÍSTICAS (FEATURES) Y TARGET ---
-    columnas_a_excluir = ['user_id', 'cedula', 'nombre', 'apellido', 
-                           'fecha_de_nacimiento', 'fecha_registro_banco'] 
-    if 'riesgo' not in df_final_ml_dataset.columns:
-        raise ValueError("La columna 'riesgo' (target) no existe. Por favor, créala primero.")
-    TARGET_COLUMN = 'riesgo'
-    
-    # Filtrar columnas existentes antes de dropear
-    existing_columns_to_exclude = [col for col in columnas_a_excluir if col in df_final_ml_dataset.columns]
-    X = df_final_ml_dataset.drop(columns=[TARGET_COLUMN] + existing_columns_to_exclude, errors='ignore')
-    y = df_final_ml_dataset[TARGET_COLUMN]
 
-    # --- 3. PREPROCESAMIENTO (CODIFICACIÓN Y ESCALADO) ---
-    categorical_features = X.select_dtypes(include=['object', 'category']).columns.tolist()
-    numerical_features = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
-    
-    # Asegurarse que no haya features vacías
-    if not categorical_features and not numerical_features:
-        logger.error("No se identificaron features categóricas ni numéricas para el preprocesador.")
-        exit()
-    
-    transformers_list = []
-    if numerical_features:
-        transformers_list.append(('num', StandardScaler(), numerical_features))
-    if categorical_features:
-        transformers_list.append(('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features))
+def _defaults(X: pd.DataFrame, numericas: list) -> dict:
+    """Valores medianos por feature numérica, para prellenar el formulario de scoring."""
+    return {c: float(X[c].median()) for c in numericas if pd.notna(X[c].median())}
 
-    if not transformers_list:
-        logger.error("La lista de transformadores está vacía. Revisa la identificación de features.")
-        # Si no hay features, no tiene sentido seguir, pero en tu caso sí las hay
-        # Podrías decidir usar 'passthrough' para todas si este fuera el caso,
-        # o simplemente no usar ColumnTransformer.
-        # Para este ejemplo, asumimos que habrá features.
-        preprocessor = 'passthrough' 
-    else:
-        preprocessor = ColumnTransformer(
-            transformers=transformers_list,
-            remainder='drop' # O 'passthrough' si quieres mantener otras columnas no especificadas
-        )
 
-    # --- 4. DIVISIÓN DE DATOS ---
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
-
-    # --- 5. ENTRENAMIENTO DEL MODELO ---
-    model_pipeline = Pipeline(steps=[('preprocessor', preprocessor),
-                                     ('classifier', RandomForestClassifier(n_estimators=100, 
-                                                                          random_state=42, 
-                                                                          class_weight='balanced_subsample'))])
-    logger.info("\nEntrenando el modelo RandomForestClassifier...")
-    model_pipeline.fit(X_train, y_train)
-    logger.info("Modelo entrenado.")
-
-    # --- 6. EVALUACIÓN DEL MODELO ---
-    logger.info("\n--- Evaluación del Modelo en el Conjunto de Prueba ---")
-    y_pred_test = model_pipeline.predict(X_test)
-    
-    # Para ROC AUC, necesitamos probabilidades de la clase positiva (1)
-    if hasattr(model_pipeline, "predict_proba"):
-        y_pred_proba_test = model_pipeline.predict_proba(X_test)[:, 1]
-        logger.info(f"ROC AUC Score: {roc_auc_score(y_test, y_pred_proba_test):.4f}")
-    else:
-        logger.warning("El modelo no tiene predict_proba, no se puede calcular ROC AUC.")
-
-    logger.info(f"Accuracy: {accuracy_score(y_test, y_pred_test):.4f}")
-    logger.info("\nReporte de Clasificación:")
-    print(classification_report(y_test, y_pred_test, zero_division=0)) # Añadir zero_division
-    logger.info("\nMatriz de Confusión:")
-    print(confusion_matrix(y_test, y_pred_test))
-
-    # --- 7. GUARDAR EL MODELO LOCALMENTE ---
-    model_filename_local = "perabank_risk_pipeline_v1.joblib"
+def upload_to_s3(path: Path) -> None:
+    """Sube el artefacto a S3 solo si las credenciales están configuradas."""
+    bucket = os.getenv("AWS_S3_BUCKET_ML")
+    if not (bucket and os.getenv("AWS_ACCESS_KEY_ID")):
+        logger.info("Variables AWS no configuradas: el modelo queda solo en local (%s).", path)
+        return
     try:
-        joblib.dump(model_pipeline, model_filename_local)
-        logger.info(f"Pipeline de Modelo completo guardado localmente como: {model_filename_local}")
+        import boto3
+        cliente = boto3.client(
+            "s3",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+        cliente.upload_file(str(path), bucket, f"models/{path.name}")
+        logger.info("Modelo subido a s3://%s/models/%s", bucket, path.name)
+    except Exception as e:
+        logger.warning("No se pudo subir a S3 (%s). El modelo local sigue siendo válido.", e)
 
-        # --- 8. SUBIR EL MODELO A S3 ---
-        if ML_ARTIFACTS_BUCKET: # Solo intentar subir si el bucket está definido
-            s3_model_key = f'models/{model_filename_local}' # Guardarlo en una "carpeta" models
-            logger.info(f"Intentando subir el modelo a: s3://{ML_ARTIFACTS_BUCKET}/{s3_model_key}")
-            try:
-                s3.upload_file(model_filename_local, ML_ARTIFACTS_BUCKET, s3_model_key)
-                logger.info(f"Pipeline de Modelo subido a S3: s3://{ML_ARTIFACTS_BUCKET}/{s3_model_key}")
-            except Exception as e_s3_upload:
-                logger.error(f"Error subiendo el modelo a S3: {e_s3_upload}", exc_info=True)
-        else:
-            logger.warning("La variable de entorno AWS_S3_BUCKET_ML (o ML_ARTIFACTS_BUCKET) no está definida. El modelo no se subirá a S3.")
 
-    except Exception as e_save:
-        logger.error(f"Error al guardar el modelo localmente: {e_save}", exc_info=True)
-    
-    logger.info("--- Fin del script de entrenamiento y guardado de modelo ---")
+def main():
+    if not DB_PATH.exists():
+        logger.error("No existe %s. Corre primero: python -m etl.run_pipeline", DB_PATH)
+        return
+
+    artefacto = {
+        "credit": train_model("credit", *build_credit_dataset()),
+        "fraud": train_model("fraud", *build_fraud_dataset()),
+        "factoring": train_model("factoring", *build_factoring_dataset()),
+        "metadata": {
+            "entrenado_en": datetime.now(timezone.utc).isoformat(),
+            "fuente": str(DB_PATH),
+            "nota_granos": (
+                "Tres modelos independientes. Las fuentes no comparten identidad de "
+                "cliente, así que no se unen features entre granos."
+            ),
+        },
+    }
+
+    joblib.dump(artefacto, MODEL_PATH)
+    logger.info("Artefacto guardado: %s (%.1f MB)", MODEL_PATH, MODEL_PATH.stat().st_size / 1e6)
+    upload_to_s3(MODEL_PATH)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-label="Datos crudos de 4 datasets y 3 APIs externas fluyen por bronze, silver y un modelo dimensional gold en SQLite; desde ahí se entrenan modelos de riesgo y clustering que sirve una app Streamlit con explicaciones de un LLM local. En paralelo, a la derecha, existe una arquitectura AWS serverless simulada localmente con Floci, que hoy es solo referencia de despliegue y no está conectada al flujo en producción.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrowAccent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b45309"/>
+    </marker>
+  </defs>
+
+  <style>
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: currentColor; }
+    .h1 { font-size: 19px; font-weight: 700; }
+    .h2 { font-size: 12px; opacity: 0.72; }
+    .lbl { font-size: 12px; font-weight: 700; }
+    .sub { font-size: 9.5px; opacity: 0.75; }
+    .arrow-lbl { font-size: 9px; opacity: 0.82; }
+    .box { fill: currentColor; fill-opacity: 0.045; stroke: currentColor; stroke-width: 1.1; }
+    .layer { fill: none; stroke: currentColor; stroke-width: 1; stroke-opacity: 0.35; }
+    .accent-box { fill: #b45309; fill-opacity: 0.07; stroke: #b45309; stroke-width: 1.1; }
+    .accent-text { fill: #b45309; }
+    .accent-lbl { font-size: 12px; font-weight: 700; fill: #b45309; }
+  </style>
+
+  <text x="800" y="26" text-anchor="middle" class="h1">PeraBank — arquitectura de datos, ML y simulación cloud</text>
+  <text x="800" y="44" text-anchor="middle" class="h2">Centro: pipeline local en producción hoy (pandas + SQLite). Derecha: arquitectura AWS serverless simulada con Floci — referencia de despliegue, sin conectar al flujo local.</text>
+
+  <!-- FUENTES -->
+  <text x="40" y="72" class="lbl">FUENTES</text>
+  <g class="box">
+    <rect x="40" y="82" width="146" height="56" rx="5"/>
+    <rect x="194" y="82" width="146" height="56" rx="5"/>
+    <rect x="348" y="82" width="146" height="56" rx="5"/>
+    <rect x="502" y="82" width="146" height="56" rx="5"/>
+    <rect x="668" y="82" width="146" height="56" rx="5"/>
+    <rect x="822" y="82" width="146" height="56" rx="5"/>
+    <rect x="976" y="82" width="146" height="56" rx="5"/>
+  </g>
+  <text x="113" y="104" text-anchor="middle" class="sub" font-weight="700">PaySim</text>
+  <text x="113" y="118" text-anchor="middle" class="sub">6.36M transacciones</text>
+  <text x="267" y="104" text-anchor="middle" class="sub" font-weight="700">Bank Marketing</text>
+  <text x="267" y="118" text-anchor="middle" class="sub">11k clientes</text>
+  <text x="421" y="104" text-anchor="middle" class="sub" font-weight="700">Bank Transactions</text>
+  <text x="421" y="118" text-anchor="middle" class="sub">1.05M movimientos</text>
+  <text x="575" y="104" text-anchor="middle" class="sub" font-weight="700">CreditCard Fraud</text>
+  <text x="575" y="118" text-anchor="middle" class="sub">284k eventos + V1..V28</text>
+  <text x="741" y="104" text-anchor="middle" class="sub" font-weight="700">Yahoo Finance</text>
+  <text x="741" y="118" text-anchor="middle" class="sub">FX + Treasuries reales</text>
+  <text x="895" y="104" text-anchor="middle" class="sub" font-weight="700">BCE / Frankfurter</text>
+  <text x="895" y="118" text-anchor="middle" class="sub">EUR histórico real</text>
+  <text x="1049" y="104" text-anchor="middle" class="sub" font-weight="700">datos.gov.co</text>
+  <text x="1049" y="118" text-anchor="middle" class="sub">TRM · tasas · SECOP II</text>
+
+  <line x1="601" y1="138" x2="601" y2="178" stroke="currentColor" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <text x="611" y="162" class="arrow-lbl">aterriza crudo (+source_system, ingested_at)</text>
+
+  <!-- BRONZE -->
+  <rect x="40" y="182" width="1122" height="44" rx="6" class="box"/>
+  <text x="601" y="200" text-anchor="middle" class="lbl">BRONZE</text>
+  <text x="601" y="215" text-anchor="middle" class="sub">parquet tal cual llega, sin transformar — etl/bronze + etl/enrichment</text>
+
+  <line x1="601" y1="226" x2="601" y2="262" stroke="currentColor" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <text x="611" y="248" class="arrow-lbl">dedup · tipos · un SilverTransform por fuente, sin renombrar entre ellas</text>
+
+  <!-- SILVER -->
+  <rect x="40" y="266" width="1122" height="44" rx="6" class="box"/>
+  <text x="601" y="284" text-anchor="middle" class="lbl">SILVER</text>
+  <text x="601" y="299" text-anchor="middle" class="sub">validado contra contrato de columnas (schemas/*.py, falla si falta una)</text>
+
+  <line x1="601" y1="310" x2="601" y2="346" stroke="currentColor" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <text x="611" y="332" class="arrow-lbl">modela dimensiones + surrogate key md5 + miembro DESCONOCIDO</text>
+
+  <!-- GOLD -->
+  <rect x="40" y="350" width="1122" height="196" rx="6" class="layer"/>
+  <text x="60" y="370" class="lbl">GOLD — perabank.db (SQLite, copo de nieve)</text>
+
+  <g class="box">
+    <rect x="52" y="380" width="178" height="38" rx="4"/>
+    <rect x="238" y="380" width="178" height="38" rx="4"/>
+    <rect x="424" y="380" width="178" height="38" rx="4"/>
+    <rect x="610" y="380" width="182" height="38" rx="4"/>
+    <rect x="800" y="380" width="182" height="38" rx="4"/>
+    <rect x="990" y="380" width="172" height="38" rx="4"/>
+  </g>
+  <text x="141" y="403" text-anchor="middle" class="sub">dim_cliente</text>
+  <text x="327" y="403" text-anchor="middle" class="sub">dim_fecha</text>
+  <text x="513" y="403" text-anchor="middle" class="sub">dim_moneda</text>
+  <text x="701" y="403" text-anchor="middle" class="sub">dim_entidad_financiera</text>
+  <text x="891" y="403" text-anchor="middle" class="sub">dim_proveedor_estatal</text>
+  <text x="1076" y="403" text-anchor="middle" class="sub">dim_tipo_credito</text>
+
+  <line x1="601" y1="418" x2="601" y2="438" stroke="currentColor" stroke-width="1.1" marker-end="url(#arrow)"/>
+  <text x="611" y="433" class="arrow-lbl">join por sk_*</text>
+
+  <g class="box">
+    <rect x="52" y="442" width="214" height="38" rx="4"/>
+    <rect x="274" y="442" width="214" height="38" rx="4"/>
+    <rect x="496" y="442" width="214" height="38" rx="4"/>
+    <rect x="718" y="442" width="214" height="38" rx="4"/>
+    <rect x="940" y="442" width="214" height="38" rx="4"/>
+  </g>
+  <text x="159" y="465" text-anchor="middle" class="sub">fact_transaccion</text>
+  <text x="381" y="465" text-anchor="middle" class="sub">fact_campana_marcado</text>
+  <text x="603" y="465" text-anchor="middle" class="sub">fact_fraude_tarjeta</text>
+  <text x="825" y="465" text-anchor="middle" class="sub">fact_contrato_estatal</text>
+  <text x="1047" y="465" text-anchor="middle" class="sub">fact_tasas_mercado</text>
+
+  <text x="60" y="500" class="sub">11 tablas · integridad referencial validada en cada corrida (assert_quality) · VACUUM al final</text>
+  <text x="60" y="516" class="sub">sk_cluster_retail / sk_cluster_supplier / sk_cluster_behavior se re-escriben después de cada corrida de gold</text>
+  <text x="60" y="532" class="sub">(run_gold recrea las tablas con if_exists="replace" — el clustering va SIEMPRE después)</text>
+
+  <line x1="601" y1="546" x2="601" y2="582" stroke="currentColor" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <text x="611" y="568" class="arrow-lbl">SELECT sobre perabank.db</text>
+
+  <!-- ML -->
+  <rect x="110" y="586" width="470" height="88" rx="6" class="box"/>
+  <text x="345" y="608" text-anchor="middle" class="lbl">MODELOS DE RIESGO</text>
+  <text x="345" y="624" text-anchor="middle" class="sub">credit · fraud · factoring — 3 granos, sin unir entre sí</text>
+  <text x="345" y="638" text-anchor="middle" class="sub">features con fuga excluidas (spread_tasa_credito, valor_pagado, ...)</text>
+  <text x="345" y="658" text-anchor="middle" class="sub" font-style="italic">→ perabank_risk_pipeline_v1.joblib</text>
+
+  <rect x="610" y="586" width="470" height="88" rx="6" class="box"/>
+  <text x="845" y="608" text-anchor="middle" class="lbl">SEGMENTACIÓN NO SUPERVISADA</text>
+  <text x="845" y="624" text-anchor="middle" class="sub">retail · proveedores · transaccional — 3 dominios, grano propio</text>
+  <text x="845" y="638" text-anchor="middle" class="sub">atributos protegidos excluidos de las features (auditados después)</text>
+  <text x="845" y="658" text-anchor="middle" class="sub" font-style="italic">→ perabank_clustering_models_v1.joblib</text>
+
+  <line x1="601" y1="674" x2="601" y2="710" stroke="currentColor" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <text x="611" y="696" class="arrow-lbl">joblib.load() cacheado por sesión (@st.cache_resource)</text>
+
+  <!-- SERVING -->
+  <rect x="210" y="714" width="470" height="88" rx="6" class="box"/>
+  <text x="445" y="738" text-anchor="middle" class="lbl">STREAMLIT</text>
+  <text x="445" y="754" text-anchor="middle" class="sub">6 tabs: portafolio · mercado · tasas · factoring · segmentación · scoring</text>
+  <text x="445" y="770" text-anchor="middle" class="sub">consultas SQL cacheadas (@st.cache_data ttl=600) sobre índices B-Tree de gold</text>
+  <text x="445" y="786" text-anchor="middle" class="sub">formulario de scoring → probabilidad + clase de riesgo</text>
+
+  <line x1="680" y1="758" x2="766" y2="758" stroke="currentColor" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <text x="723" y="748" text-anchor="middle" class="arrow-lbl">POST /api/generate</text>
+
+  <rect x="770" y="714" width="290" height="88" rx="6" class="box"/>
+  <text x="915" y="738" text-anchor="middle" class="lbl">OLLAMA (local)</text>
+  <text x="915" y="754" text-anchor="middle" class="sub">qwen2.5:3b · localhost:11434</text>
+  <text x="915" y="770" text-anchor="middle" class="sub">explicación ejecutiva del score</text>
+  <text x="915" y="786" text-anchor="middle" class="sub">sin API key, sin costo por token</text>
+
+  <text x="40" y="850" class="h2">Reemplazó a Gemini/GCP el 2026-08-06: sin credenciales que rotar y sin enviar perfiles de clientes a un servicio externo.</text>
+
+  <!-- CLOUD SIMULATION (right column) -->
+  <rect x="1200" y="64" width="360" height="758" rx="8" class="accent-box" stroke-dasharray="6 4"/>
+  <text x="1380" y="88" text-anchor="middle" class="accent-lbl">SIMULACIÓN CLOUD (referencia)</text>
+  <text x="1380" y="104" text-anchor="middle" class="sub" fill="#b45309">IAC/*.py contra Floci/moto :4566 — no conectada al flujo local hoy</text>
+
+  <rect x="1220" y="118" width="320" height="56" rx="5" class="accent-box"/>
+  <text x="1380" y="140" text-anchor="middle" class="sub accent-text" font-weight="700">S3 — data lake de 4 capas</text>
+  <text x="1380" y="154" text-anchor="middle" class="sub" fill="#b45309">bronze · silver · gold · ml-artifacts (AES256)</text>
+  <text x="1380" y="166" text-anchor="middle" class="sub" fill="#b45309">bronze → GLACIER a los 30 días</text>
+
+  <line x1="1380" y1="174" x2="1380" y2="196" stroke="#b45309" stroke-width="1.1" marker-end="url(#arrowAccent)"/>
+  <text x="1390" y="188" class="arrow-lbl" fill="#b45309">ObjectCreated / mensaje SQS</text>
+
+  <rect x="1220" y="200" width="320" height="56" rx="5" class="accent-box"/>
+  <text x="1380" y="222" text-anchor="middle" class="sub accent-text" font-weight="700">SQS FIFO + DLQ</text>
+  <text x="1380" y="236" text-anchor="middle" class="sub" fill="#b45309">ingest.fifo (dedup por contenido)</text>
+  <text x="1380" y="248" text-anchor="middle" class="sub" fill="#b45309">redrive a DLQ tras 3 intentos</text>
+
+  <line x1="1380" y1="256" x2="1380" y2="278" stroke="#b45309" stroke-width="1.1" marker-end="url(#arrowAccent)"/>
+  <text x="1390" y="270" class="arrow-lbl" fill="#b45309">consume batch</text>
+
+  <rect x="1220" y="282" width="320" height="56" rx="5" class="accent-box"/>
+  <text x="1380" y="304" text-anchor="middle" class="sub accent-text" font-weight="700">LAMBDA — lambda_etl_trigger</text>
+  <text x="1380" y="318" text-anchor="middle" class="sub" fill="#b45309">aterriza JSON en S3 bronze</text>
+  <text x="1380" y="330" text-anchor="middle" class="sub" fill="#b45309">particionado year=/month=/day= · zip 1.8 KB</text>
+
+  <line x1="1380" y1="338" x2="1380" y2="360" stroke="#b45309" stroke-width="1.1" marker-end="url(#arrowAccent)"/>
+  <text x="1390" y="352" class="arrow-lbl" fill="#b45309">features del cliente</text>
+
+  <rect x="1220" y="364" width="320" height="56" rx="5" class="accent-box"/>
+  <text x="1380" y="386" text-anchor="middle" class="sub accent-text" font-weight="700">DYNAMODB — 2 tablas on-demand</text>
+  <text x="1380" y="400" text-anchor="middle" class="sub" fill="#b45309">Customer_Features · Fraud_Alerts</text>
+  <text x="1380" y="412" text-anchor="middle" class="sub" fill="#b45309">GSI gsi_macro_risk (banda, monto)</text>
+
+  <line x1="1380" y1="420" x2="1380" y2="442" stroke="#b45309" stroke-width="1.1" marker-end="url(#arrowAccent)"/>
+  <text x="1390" y="434" class="arrow-lbl" fill="#b45309">GetItem / PutItem</text>
+
+  <rect x="1220" y="446" width="320" height="56" rx="5" class="accent-box"/>
+  <text x="1380" y="468" text-anchor="middle" class="sub accent-text" font-weight="700">LAMBDA — lambda_risk_scorer</text>
+  <text x="1380" y="482" text-anchor="middle" class="sub" fill="#b45309">descarga el joblib de S3 en frío</text>
+  <text x="1380" y="494" text-anchor="middle" class="sub" fill="#b45309">cachea en /tmp entre invocaciones tibias</text>
+
+  <line x1="1380" y1="502" x2="1380" y2="524" stroke="#b45309" stroke-width="1.1" marker-end="url(#arrowAccent)"/>
+  <text x="1390" y="516" class="arrow-lbl" fill="#b45309">integración AWS_PROXY</text>
+
+  <rect x="1220" y="528" width="320" height="56" rx="5" class="accent-box"/>
+  <text x="1380" y="550" text-anchor="middle" class="sub accent-text" font-weight="700">API GATEWAY HTTP</text>
+  <text x="1380" y="564" text-anchor="middle" class="sub" fill="#b45309">POST /v1/risk/score</text>
+  <text x="1380" y="576" text-anchor="middle" class="sub" fill="#b45309">GET /v1/market/trm</text>
+
+  <rect x="1220" y="602" width="320" height="70" rx="5" class="accent-box" stroke-dasharray="3 3"/>
+  <text x="1380" y="622" text-anchor="middle" class="sub accent-text" font-weight="700">IAM — privilegio mínimo</text>
+  <text x="1380" y="636" text-anchor="middle" class="sub" fill="#b45309">13 ARNs explícitos, 0 comodines</text>
+  <text x="1380" y="650" text-anchor="middle" class="sub" fill="#b45309">verificado con auditar_comodines()</text>
+  <text x="1380" y="664" text-anchor="middle" class="sub" fill="#b45309">.env con credenciales reales → nunca sin _validar_endpoint()</text>
+
+  <rect x="1220" y="688" width="320" height="60" rx="5" class="accent-box"/>
+  <text x="1380" y="708" text-anchor="middle" class="sub accent-text" font-weight="700">COSTO ESTIMADO EN AWS REAL</text>
+  <text x="1380" y="722" text-anchor="middle" class="sub" fill="#b45309">$3.35/mes a 500k tx (objetivo &lt;$5 ✓)</text>
+  <text x="1380" y="734" text-anchor="middle" class="sub" fill="#b45309">PUT de S3 = 74% del costo — el cuello real</text>
+
+  <text x="1220" y="770" class="sub" fill="#b45309">Verificado extremo a extremo contra moto (Docker no disponible aquí);</text>
+  <text x="1220" y="784" class="sub" fill="#b45309">mismo código boto3 corre igual contra Floci real.</text>
+  <text x="1220" y="806" class="sub" fill="#b45309">simulate_pipeline.py: 8/8 pasos ✓ · silver_compaction.py:</text>
+  <text x="1220" y="818" class="sub" fill="#b45309">26 objetos → 1 Parquet, 25 PUT evitados</text>
+</svg>

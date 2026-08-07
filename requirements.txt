@@ -1,5 +1,6 @@
 faker
 pandas
+yfinance
 boto3
 python-dotenv
 numpy
@@ -9,4 +10,6 @@ pyarrow
 joblib
 scikit-learn
 streamlit
+plotly
 matplotlib
+moto[server]
