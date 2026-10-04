@@ -49,11 +49,19 @@ def _to_sk_fecha(fechas: pd.Series) -> pd.Series:
     return sk.fillna(SK_FECHA_DESCONOCIDA).astype("int64")
 
 
+def _empty_rates(*rate_cols: str) -> pd.DataFrame:
+    """Tabla de tasas vacía con dtypes explícitos. Sin ellos las columnas quedan como
+    object, el left merge las propaga así y fillna ya no las convierte a float
+    (pandas dejó de hacer ese downcast silencioso): los montos saldrían como object."""
+    return pd.DataFrame({"fecha": pd.Series(dtype="object"),
+                         **{c: pd.Series(dtype="float64") for c in rate_cols}})
+
+
 def _load_market() -> pd.DataFrame:
     df = load_silver("enrichment_market")
     if df.empty:
-        return pd.DataFrame(columns=["fecha", "tasa_usd_inr", "tasa_usd_eur", "tasa_usd_cop",
-                                     "tasa_ibr_overnight", "volatilidad_fx_30d"])
+        return _empty_rates("tasa_usd_inr", "tasa_usd_eur", "tasa_usd_cop",
+                            "tasa_ibr_overnight", "volatilidad_fx_30d")
     return df
 
 
@@ -61,7 +69,7 @@ def _load_trm() -> pd.DataFrame:
     """TRM oficial de Superfinanciera, normalizada a (fecha, tasa_trm_oficial)."""
     df = load_silver("enrichment_trm_gov")
     if df.empty:
-        return pd.DataFrame(columns=["fecha", "tasa_trm_oficial"])
+        return _empty_rates("tasa_trm_oficial")
     out = pd.DataFrame({
         "fecha": pd.to_datetime(df["vigenciadesde"], errors="coerce").dt.strftime("%Y-%m-%d"),
         "tasa_trm_oficial": pd.to_numeric(df["valor"], errors="coerce"),
@@ -72,7 +80,7 @@ def _load_trm() -> pd.DataFrame:
 def _load_ecb() -> pd.DataFrame:
     df = load_silver("enrichment_ecb")
     if df.empty:
-        return pd.DataFrame(columns=["fecha", "tasa_eur_usd"])
+        return _empty_rates("tasa_eur_usd")
     return df[["fecha", "tasa_eur_usd"]].drop_duplicates(subset=["fecha"])
 
 
