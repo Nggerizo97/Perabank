@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["venv", "output_enhanced"]
+
+[tool.ruff.lint]
+# Errores reales (sintaxis, nombres indefinidos, imports sin uso). Explícito para que
+# CI no dependa de una configuración de ruff a nivel de usuario.
+select = ["E4", "E7", "E9", "F"]

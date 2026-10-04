@@ -7,7 +7,7 @@ nada relevante. A 500k peticiones/mes la diferencia es el grueso del presupuesto
 from botocore.exceptions import ClientError
 
 from IAC.floci_config import (
-    API_NOMBRE, LAMBDA_ETL, LAMBDA_SCORER, REGION, arn_lambda, cliente,
+    API_NOMBRE, LAMBDA_SCORER, REGION, arn_lambda, cliente,
 )
 
 RUTAS = [

@@ -168,7 +168,6 @@ def build_fact_campana_marcado() -> pd.DataFrame:
     """Hechos de campaña de captación, con pricing sobre IBR y contexto de tasas
     reales del mercado colombiano (activas y de captación)."""
     logger.info("Construyendo fact_campana_marcado...")
-    now_iso = _now_iso()
     df_bm = load_silver("bank_marketing")
     if df_bm.empty:
         return pd.DataFrame()
