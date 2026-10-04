@@ -206,3 +206,37 @@ SILVER_ENRICHMENT_SECOP_CONTRATOS_CONTRACT = TableContract(
 )
 
 
+
+SILVER_LENDINGCLUB_CONTRACT = TableContract(
+    table_name="lendingclub",
+    layer="silver",
+    primary_keys=["id"],
+    columns=[
+        ColumnContract("id", "int64", False, "ID del préstamo en LendingClub"),
+        ColumnContract("issue_d", "date", False, "Mes de originación"),
+        ColumnContract("term", "int32", False, "Plazo en meses (36 o 60)"),
+        ColumnContract("int_rate", "float64", True, "Tasa asignada por LendingClub (%)"),
+        ColumnContract("installment", "float64", True, "Cuota mensual"),
+        ColumnContract("grade", "string", True, "Grado de riesgo asignado por LendingClub"),
+        ColumnContract("sub_grade", "string", True, "Subgrado de riesgo asignado por LendingClub"),
+        ColumnContract("loan_amnt", "int64", True, "Monto solicitado"),
+        ColumnContract("funded_amnt", "int64", True, "Monto desembolsado"),
+        ColumnContract("emp_length", "int32", True, "Antigüedad laboral en años (0-10)"),
+        ColumnContract("earliest_cr_line", "date", True, "Apertura de la primera línea de crédito"),
+        ColumnContract("revol_util", "float64", True, "Utilización de crédito rotativo (%)"),
+        ColumnContract("loan_status", "string", False, "Estado del préstamo al corte del dataset"),
+        ColumnContract("last_pymnt_d", "date", True, "Mes del último pago recibido"),
+        ColumnContract("source_system", "string", False, "Sistema origen"),
+        ColumnContract("ingested_at", "string", False, "Timestamp UTC de ingesta"),
+    ] + [
+        ColumnContract(name, "as-is", True, "Columna de LendingClub sin transformar")
+        for name in [
+            "home_ownership", "annual_inc", "verification_status", "purpose", "addr_state", "zip_code",
+            "dti", "delinq_2yrs", "fico_range_low", "fico_range_high", "inq_last_6mths",
+            "mths_since_last_delinq", "mths_since_last_record", "open_acc", "pub_rec", "revol_bal",
+            "total_acc", "initial_list_status", "application_type", "mort_acc", "pub_rec_bankruptcies",
+            "acc_open_past_24mths", "bc_util", "num_actv_rev_tl", "tot_cur_bal", "total_rev_hi_lim",
+            "total_pymnt", "total_rec_prncp", "recoveries", "collection_recovery_fee",
+        ]
+    ],
+)

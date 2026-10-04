@@ -80,3 +80,27 @@ BRONZE_CREDITCARD_CONTRACT = TableContract(
         ColumnContract("ingested_at", "string", False, "Timestamp UTC de ingesta"),
     ]
 )
+
+# Solo las columnas que consumen silver y gold: el archivo trae 142, y exigirlas
+# todas haría fallar la ingesta por columnas que nadie usa (p.ej. hardship_*).
+BRONZE_LENDINGCLUB_CONTRACT = TableContract(
+    table_name="lendingclub",
+    layer="bronze",
+    primary_keys=["id"],
+    columns=[
+        ColumnContract(name, "string", True, "Columna cruda de LendingClub (ver datalake/LCDataDictionary.xlsx)")
+        for name in [
+            "id", "loan_amnt", "funded_amnt", "term", "int_rate", "installment", "grade", "sub_grade",
+            "emp_length", "home_ownership", "annual_inc", "verification_status", "issue_d", "loan_status",
+            "purpose", "addr_state", "zip_code", "dti", "delinq_2yrs", "earliest_cr_line",
+            "fico_range_low", "fico_range_high", "inq_last_6mths", "mths_since_last_delinq",
+            "mths_since_last_record", "open_acc", "pub_rec", "revol_bal", "revol_util", "total_acc",
+            "initial_list_status", "application_type", "mort_acc", "pub_rec_bankruptcies",
+            "acc_open_past_24mths", "bc_util", "num_actv_rev_tl", "tot_cur_bal", "total_rev_hi_lim",
+            "total_pymnt", "total_rec_prncp", "recoveries", "collection_recovery_fee", "last_pymnt_d",
+        ]
+    ] + [
+        ColumnContract("source_system", "string", False, "Sistema origen"),
+        ColumnContract("ingested_at", "string", False, "Timestamp UTC de ingesta"),
+    ],
+)
