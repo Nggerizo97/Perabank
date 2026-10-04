@@ -1,4 +1,4 @@
-"""Entrenamiento de los modelos de riesgo de PeraBank contra el warehouse Gold (SQLite).
+"""Entrenamiento de los modelos de riesgo de PeraBank contra el warehouse Gold (Parquet vía DuckDB).
 
 Se entrenan TRES modelos, uno por grano real de datos. No se unen entre sí porque las
 fuentes no comparten identidad de cliente: unir un proveedor del SECOP con un cliente
@@ -14,7 +14,6 @@ de features que la app de Streamlit usa para construir sus formularios.
 from datetime import datetime, timezone
 import logging
 import os
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -38,7 +37,9 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-DB_PATH = REPO_ROOT / "data" / "perabank.db"
+from etl.common import warehouse  # noqa: E402  (requiere REPO_ROOT en sys.path)
+from etl.common.config import GOLD_DIR  # noqa: E402
+
 MODEL_PATH = REPO_ROOT / "perabank_risk_pipeline_v1.joblib"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -52,11 +53,6 @@ RANDOM_STATE = 42
 # Construcción de datasets, uno por grano
 # ---------------------------------------------------------------------------
 
-def _query(sql: str) -> pd.DataFrame:
-    with sqlite3.connect(DB_PATH) as conn:
-        return pd.read_sql(sql, conn)
-
-
 def build_credit_dataset() -> tuple:
     """Riesgo de mora minorista. Join real vía sk_cliente y sk_fecha.
 
@@ -64,7 +60,7 @@ def build_credit_dataset() -> tuple:
     las deriva de tiene_mora, así que usarlas como features sería fuga del target
     (el modelo leería la respuesta en la pregunta y daría un AUC irreal de ~1.0).
     """
-    df = _query("""
+    df = warehouse.query("""
         SELECT c.edad, c.ocupacion, c.estado_civil, c.nivel_educativo,
                f.balance_eur, f.tiene_hipoteca, f.tiene_prestamo_personal,
                f.duracion_contacto_seg, f.resultado_previo,
@@ -72,10 +68,11 @@ def build_credit_dataset() -> tuple:
                f.tiene_mora
         FROM fact_campana_marcado f
         JOIN dim_cliente c ON c.sk_cliente = f.sk_cliente
+        ORDER BY f.id_campana_contacto
     """)
 
     # Contexto macro real del warehouse: promedio de los benchmarks de tesorería.
-    macro = _query("""
+    macro = warehouse.query("""
         SELECT tipo_tasa, AVG(valor_tasa) AS valor
         FROM fact_tasas_mercado
         WHERE tipo_tasa IN ('TREASURY_10Y', 'TBILL_3M')
@@ -92,7 +89,7 @@ def build_credit_dataset() -> tuple:
 
 def build_fraud_dataset() -> tuple:
     """Fraude con tarjeta. Los componentes PCA V1..V28 son la señal predictiva real."""
-    df = _query("SELECT * FROM fact_fraude_tarjeta")
+    df = warehouse.query("SELECT * FROM fact_fraude_tarjeta")
     df = df.drop(columns=["id_evento_tarjeta", "source_system"], errors="ignore")
 
     y = df.pop("es_fraude").astype(int)
@@ -107,13 +104,14 @@ def build_factoring_dataset() -> tuple:
     Target: el contrato superó el 50% de ejecución de pago.
     Se EXCLUYEN valor_pagado y valor_pendiente: ambos definen el target aritméticamente.
     """
-    df = _query("""
+    df = warehouse.query("""
         SELECT f.id_contrato, f.sk_proveedor, f.valor_del_contrato, f.valor_pagado,
                f.departamento, f.estado_contrato, f.tipo_de_contrato,
                f.modalidad_de_contratacion, p.es_pyme
         FROM fact_contrato_estatal f
         JOIN dim_proveedor_estatal p ON p.sk_proveedor = f.sk_proveedor
         WHERE f.valor_del_contrato > 0
+        ORDER BY f.id_contrato
     """)
 
     # Volumen de contratación por proveedor: señal legítima de trayectoria.
@@ -238,8 +236,8 @@ def upload_to_s3(path: Path) -> None:
 
 
 def main():
-    if not DB_PATH.exists():
-        logger.error("No existe %s. Corre primero: python -m etl.run_pipeline", DB_PATH)
+    if not warehouse.tables():
+        logger.error("No hay tablas gold en %s. Corre primero: python -m etl.run_pipeline", GOLD_DIR)
         return
 
     artefacto = {
@@ -248,7 +246,7 @@ def main():
         "factoring": train_model("factoring", *build_factoring_dataset()),
         "metadata": {
             "entrenado_en": datetime.now(timezone.utc).isoformat(),
-            "fuente": str(DB_PATH),
+            "fuente": str(GOLD_DIR),
             "nota_granos": (
                 "Tres modelos independientes. Las fuentes no comparten identidad de "
                 "cliente, así que no se unen features entre granos."

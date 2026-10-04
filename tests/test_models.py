@@ -3,12 +3,11 @@
 Se arma un warehouse gold mínimo a partir del silver sintético y se apunta el módulo
 de entrenamiento a él, para probar las consultas reales y no una copia de ellas.
 """
-import sqlite3
-
 import numpy as np
 import pandas as pd
 import pytest
 
+from etl.common import warehouse
 from etl.gold.dimensions import build_dim_cliente
 from etl.gold.facts import build_fact_campana_marcado
 from models import ml_perabanck_official as ml
@@ -18,18 +17,14 @@ CREDIT_LEAKAGE = {"tiene_mora", "spread_tasa_credito", "tasa_oferta_estimada"}
 
 
 @pytest.fixture
-def gold_db(fake_silver, tmp_path, monkeypatch):
-    db_path = tmp_path / "gold.db"
-    fact_tasas = pd.DataFrame({
+def gold_db(fake_silver, gold_dir):
+    warehouse.write_table(build_dim_cliente(), "dim_cliente")
+    warehouse.write_table(build_fact_campana_marcado(), "fact_campana_marcado")
+    warehouse.write_table(pd.DataFrame({
         "tipo_tasa": ["TREASURY_10Y", "TBILL_3M", "IBR"],
         "valor_tasa": [4.2, 5.1, 9.0],
-    })
-    with sqlite3.connect(db_path) as conn:
-        build_dim_cliente().to_sql("dim_cliente", conn, index=False)
-        build_fact_campana_marcado().to_sql("fact_campana_marcado", conn, index=False)
-        fact_tasas.to_sql("fact_tasas_mercado", conn, index=False)
-    monkeypatch.setattr(ml, "DB_PATH", db_path)
-    return db_path
+    }), "fact_tasas_mercado")
+    return gold_dir
 
 
 def test_credit_dataset_excludes_target_derived_columns(gold_db):

@@ -1,12 +1,10 @@
-"""PeraBank — Panel de riesgo y mercado sobre el warehouse Gold (copo de nieve, SQLite).
+"""PeraBank — Panel de riesgo y mercado sobre el warehouse Gold (copo de nieve).
 
-Lee exclusivamente de data/perabank.db. Toda consulta va cacheada y se apoya en los
-índices B-Tree creados por la capa gold sobre sk_cliente, sk_fecha, sk_moneda,
-sk_entidad, sk_proveedor y sk_tipo_credito.
+Lee exclusivamente de data/gold/*.parquet a través de DuckDB (etl/common/warehouse.py),
+que consulta los Parquet en sitio sin copiarlos a otra base. Toda consulta va cacheada.
 """
 import json
 import os
-import sqlite3
 from pathlib import Path
 
 import joblib
@@ -17,8 +15,10 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
+from etl.common import warehouse
+from etl.common.config import GOLD_DIR
+
 REPO_ROOT = Path(__file__).resolve().parent
-DB_PATH = REPO_ROOT / "data" / "perabank.db"
 MODEL_PATH = REPO_ROOT / "perabank_risk_pipeline_v1.joblib"
 CLUSTERING_PATH = REPO_ROOT / "models" / "perabank_clustering_models_v1.joblib"
 
@@ -42,11 +42,8 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 def run_query(sql: str, params: tuple = ()) -> pd.DataFrame:
     """Ejecuta una consulta contra el warehouse. Devuelve DataFrame vacío si la
     tabla no existe todavía, para que la UI degrade con un aviso y no una excepción."""
-    if not DB_PATH.exists():
-        return pd.DataFrame()
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            return pd.read_sql(sql, conn, params=params)
+        return warehouse.query(sql, params)
     except Exception as exc:  # tabla ausente o esquema desactualizado
         st.session_state.setdefault("errores_sql", []).append(str(exc))
         return pd.DataFrame()
@@ -54,8 +51,7 @@ def run_query(sql: str, params: tuple = ()) -> pd.DataFrame:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def tablas_disponibles() -> set:
-    df = run_query("SELECT name FROM sqlite_master WHERE type='table'")
-    return set(df["name"]) if not df.empty else set()
+    return warehouse.tables()
 
 
 @st.cache_resource(show_spinner=False)
@@ -81,8 +77,8 @@ def cargar_modelos() -> dict:
 
 
 def exigir_warehouse() -> bool:
-    if not DB_PATH.exists():
-        st.error(f"No se encontró el warehouse en `{DB_PATH}`.")
+    if not warehouse.tables():
+        st.error(f"No se encontraron tablas gold en `{GOLD_DIR}`.")
         st.info("Genéralo con:  `python -m etl.run_pipeline`")
         return False
     faltantes = {"dim_cliente", "fact_transaccion"} - tablas_disponibles()
@@ -560,29 +556,30 @@ def tab_factoring():
 
 CONSULTAS_SEGMENTOS = {
     "retail": """
-        SELECT f.sk_cliente AS entidad, c.sk_cluster_retail AS cluster,
+        SELECT f.sk_cliente AS entidad, s.sk_cluster_retail AS cluster,
                f.balance_usd, f.duracion_contacto_seg, f.tiene_hipoteca,
                f.tiene_prestamo_personal, f.suscrito_deposito
         FROM fact_campana_marcado f
-        JOIN dim_cliente c ON c.sk_cliente = f.sk_cliente
-        WHERE c.sk_cluster_retail IS NOT NULL
+        JOIN cluster_retail s ON s.sk_cliente = f.sk_cliente
     """,
     "proveedores": """
-        SELECT p.sk_proveedor AS entidad, p.sk_cluster_supplier AS cluster,
+        SELECT p.sk_proveedor AS entidad, s.sk_cluster_supplier AS cluster,
                p.proveedor_adjudicado, p.es_pyme,
                SUM(f.valor_del_contrato) AS valor_del_contrato,
                SUM(f.valor_pagado)       AS valor_pagado,
                COUNT(*)                  AS contratos_adjudicados
         FROM fact_contrato_estatal f
         JOIN dim_proveedor_estatal p ON p.sk_proveedor = f.sk_proveedor
-        WHERE f.valor_del_contrato > 0 AND p.sk_cluster_supplier IS NOT NULL
-        GROUP BY p.sk_proveedor, p.proveedor_adjudicado, p.es_pyme, p.sk_cluster_supplier
+        JOIN cluster_proveedores s ON s.sk_proveedor = p.sk_proveedor
+        WHERE f.valor_del_contrato > 0
+        GROUP BY p.sk_proveedor, p.proveedor_adjudicado, p.es_pyme, s.sk_cluster_supplier
     """,
     # Se traen las V1..V28 porque la proyección 3D las necesita para transformar con
     # el PCA ajustado; se ocultan de la tabla de detalle, donde no aportan lectura.
     "transaccional": """
-        SELECT id_evento_tarjeta AS entidad, sk_cluster_behavior AS cluster, *
-        FROM fact_fraude_tarjeta WHERE sk_cluster_behavior IS NOT NULL
+        SELECT f.id_evento_tarjeta AS entidad, s.sk_cluster_behavior AS cluster, f.*
+        FROM fact_fraude_tarjeta f
+        JOIN cluster_transaccional s ON s.id_evento_tarjeta = f.id_evento_tarjeta
     """,
 }
 
@@ -640,9 +637,9 @@ def tab_segmentacion():
 
     if df.empty:
         st.warning(
-            f"El warehouse no tiene columnas de cluster para `{dominio}`. "
-            "Vuelve a correr `python models/ml_clustering_pipeline.py` "
-            "(la capa gold las borra al reconstruirse)."
+            f"El warehouse no tiene asignaciones de cluster para `{dominio}` "
+            f"(tabla `cluster_{dominio}`). Genéralas con "
+            "`python models/ml_clustering_pipeline.py`."
         )
         return
 
@@ -951,7 +948,7 @@ dado el desbalance de clases, y cierra con una recomendación accionable."""
 
 def main():
     st.title("🏦 PeraBank — Risk & Market Intelligence")
-    st.caption("Warehouse Gold en modelo copo de nieve · 11 tablas · SQLite indexado")
+    st.caption("Warehouse Gold en modelo copo de nieve · Parquet consultado con DuckDB")
 
     if not exigir_warehouse():
         return
@@ -960,7 +957,7 @@ def main():
         st.header("Estado del warehouse")
         tablas = tablas_disponibles()
         st.metric("Tablas disponibles", len(tablas))
-        st.metric("Tamaño de la base", f"{DB_PATH.stat().st_size / 1e6:,.0f} MB")
+        st.metric("Tamaño en Parquet", f"{warehouse.size_bytes() / 1e6:,.0f} MB")
         st.write("**Modelos ML:**", "✅ cargados" if cargar_modelos() else "⚠️ sin entrenar")
         st.write("**Segmentación:**", "✅ cargada" if cargar_clustering() else "⚠️ sin generar")
         listo, detalle = ollama_disponible()

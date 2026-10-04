@@ -84,3 +84,12 @@ def fake_silver(monkeypatch, silver_frames) -> dict:
     monkeypatch.setattr("etl.gold.dimensions.load_silver", _load)
     monkeypatch.setattr("etl.gold.facts.load_silver", _load)
     return silver_frames
+
+
+@pytest.fixture
+def gold_dir(tmp_path, monkeypatch):
+    """Warehouse gold vacío y aislado: todo lo que lee o escribe etl.common.warehouse
+    durante el test ocurre aquí, nunca en data/gold."""
+    path = tmp_path / "gold"
+    monkeypatch.setattr("etl.common.warehouse.GOLD_DIR", path)
+    return path

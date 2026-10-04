@@ -2,13 +2,12 @@
 
 Orden de construcción: sub-dimensiones nivel 2 -> dimensiones nivel 1 -> hechos.
 Cada tabla pasa por assert_quality (PK única, no nulos, integridad referencial)
-antes de persistirse en Parquet y SQLite, con índices B-Tree sobre PK y FK.
+antes de persistirse en Parquet, que es el único almacenamiento de gold: DuckDB lo
+consulta en sitio (etl/common/warehouse.py).
 """
-import sqlite3
-
 import pandas as pd
 
-from etl.common.config import GOLD_DIR, SQLITE_DB_PATH
+from etl.common.config import GOLD_DIR
 from etl.common.logging_utils import get_logger
 from etl.common.quality_checks import assert_quality
 from etl.gold.dimensions import (
@@ -28,50 +27,6 @@ from etl.gold.facts import (
 )
 
 logger = get_logger(__name__)
-
-# Índices B-Tree por tabla: PK primero, luego cada FK usada en joins.
-SQLITE_INDEXES = {
-    "dim_entidad_financiera": ["sk_entidad"],
-    "dim_proveedor_estatal": ["sk_proveedor"],
-    "dim_tipo_credito": ["sk_tipo_credito"],
-    "dim_cliente": ["sk_cliente", "sk_entidad"],
-    "dim_fecha": ["sk_fecha"],
-    "dim_moneda": ["sk_moneda"],
-    "fact_transaccion": ["id_transaccion", "sk_cliente", "sk_fecha", "sk_moneda"],
-    "fact_campana_marcado": ["id_campana_contacto", "sk_cliente", "sk_fecha", "sk_tipo_credito"],
-    "fact_fraude_tarjeta": ["id_evento_tarjeta"],
-    "fact_contrato_estatal": ["id_contrato", "sk_proveedor", "sk_fecha"],
-    "fact_tasas_mercado": ["id_observacion_tasa", "sk_fecha", "sk_entidad", "sk_tipo_credito"],
-}
-
-
-def export_to_sqlite(gold_tables: dict) -> None:
-    """Exporta las tablas Gold a SQLite y crea los índices sobre PK y FK."""
-    logger.info("Exportando tablas Gold a SQLite (%s)...", SQLITE_DB_PATH)
-    SQLITE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    with sqlite3.connect(SQLITE_DB_PATH) as conn:
-        conn.execute("PRAGMA foreign_keys = ON;")
-        for table_name, df in gold_tables.items():
-            df.to_sql(table_name, conn, if_exists="replace", index=False)
-            logger.info("Tabla SQLite '%s' actualizada (%s filas).", table_name, len(df))
-
-        total_indexes = 0
-        for table_name, columns in SQLITE_INDEXES.items():
-            if table_name not in gold_tables:
-                continue
-            for column in columns:
-                index_name = f"idx_{table_name}_{column}"
-                conn.execute(f'CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column});')
-                total_indexes += 1
-        conn.commit()
-        logger.info("Índices B-Tree creados/verificados: %s.", total_indexes)
-
-    # if_exists="replace" deja páginas libres en el archivo: sin VACUUM el .db sigue
-    # ocupando el tamaño de la corrida más grande que haya existido.
-    with sqlite3.connect(SQLITE_DB_PATH, isolation_level=None) as conn:
-        conn.execute("VACUUM;")
-    logger.info("SQLite compactado (VACUUM): %.1f MB.", SQLITE_DB_PATH.stat().st_size / 1e6)
 
 
 def _persist(df: pd.DataFrame, name: str) -> None:
@@ -164,20 +119,6 @@ def main():
     )
     _persist(fact_tasas, "fact_tasas_mercado")
 
-    # 4. Persistencia en SQLite con índices
-    export_to_sqlite({
-        "dim_entidad_financiera": dim_entidad,
-        "dim_proveedor_estatal": dim_proveedor,
-        "dim_tipo_credito": dim_tipo_credito,
-        "dim_cliente": dim_cliente,
-        "dim_fecha": dim_fecha,
-        "dim_moneda": dim_moneda,
-        "fact_transaccion": fact_transaccion,
-        "fact_campana_marcado": fact_campana,
-        "fact_fraude_tarjeta": fact_fraude,
-        "fact_contrato_estatal": fact_contrato,
-        "fact_tasas_mercado": fact_tasas,
-    })
 
     logger.info("--- CAPA GOLD COMPLETADA EXITOSAMENTE ---")
 
