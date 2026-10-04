@@ -15,7 +15,7 @@ venv/
 *.log
 logs/
 
-# ETL/ML output — data/ holds bronze/silver/gold parquet + perabank.db,
+# ETL/ML output — data/ holds bronze/silver/gold parquet (+ gold cluster_*.parquet),
 # regenerated locally with `python -m etl.run_pipeline`. Model artifacts
 # (perabank_risk_pipeline_v1.joblib, models/*.joblib) are regenerated with
 # `python models/ml_perabanck_official.py` and ml_clustering_pipeline.py.

@@ -11,8 +11,6 @@ BRONZE_DIR = DATA_DIR / "bronze"
 SILVER_DIR = DATA_DIR / "silver"
 GOLD_DIR = DATA_DIR / "gold"
 
-SQLITE_DB_PATH = DATA_DIR / "perabank.db"
-
 RAW_SOURCES = {
     "paysim": DATALAKE_DIR / "PS_20174392719_1491204439457_log.csv",
     "bank_marketing": DATALAKE_DIR / "bank.csv",

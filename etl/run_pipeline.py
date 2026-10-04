@@ -23,11 +23,8 @@ def main():
 
 
 def run_clustering():
-    """Segmentación no supervisada, después de gold y nunca antes.
-
-    run_gold recrea sus tablas con if_exists="replace", lo que elimina las columnas
-    sk_cluster_*. Encadenarla aquí garantiza que el warehouse quede siempre con los
-    clusters poblados al terminar el pipeline.
+    """Segmentación no supervisada, después de gold y nunca antes: agrupa sobre las
+    tablas gold recién construidas y deja sus asignaciones en cluster_<dominio>.parquet.
     """
     from models.ml_clustering_pipeline import main as run_segmentacion
     run_segmentacion()

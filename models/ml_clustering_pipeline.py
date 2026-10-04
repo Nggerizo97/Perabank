@@ -13,13 +13,12 @@ Mitigación de sesgo: la matriz de features es exclusivamente financiera/conduct
 Los atributos protegidos se excluyen de la generación de clusters y solo se usan
 DESPUÉS, para auditar si el algoritmo los reconstruyó implícitamente.
 
-IMPORTANTE: las columnas de cluster se escriben dentro de tablas que `run_gold`
-recrea con if_exists="replace". Por eso este script se ejecuta DESPUÉS de gold y
-está encadenado en etl/run_pipeline.py; correr gold por separado las borra.
+Las asignaciones se escriben como tablas propias (cluster_<dominio>.parquet) junto
+a gold, nunca dentro de las tablas del ETL: reconstruir gold no las borra y un
+SELECT * sobre un hecho no las arrastra como feature a otro modelo.
 """
 from datetime import datetime, timezone
 import logging
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -37,7 +36,9 @@ from sklearn.preprocessing import FunctionTransformer, RobustScaler, StandardSca
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-DB_PATH = REPO_ROOT / "data" / "perabank.db"
+from etl.common import warehouse  # noqa: E402  (requiere REPO_ROOT en sys.path)
+from etl.common.config import GOLD_DIR  # noqa: E402
+
 ARTIFACT_PATH = REPO_ROOT / "models" / "perabank_clustering_models_v1.joblib"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -51,11 +52,6 @@ SILUETA_MUESTRA = 5000
 # etiquetas/reglas derivadas que provocarían fuga de información.
 ATRIBUTOS_PROTEGIDOS = ["genero", "edad", "ubicacion", "estado_civil", "nivel_educativo", "ocupacion"]
 COLUMNAS_CON_FUGA = ["tiene_mora", "es_mora", "es_fraude", "spread_tasa_credito", "tasa_oferta_estimada"]
-
-
-def _query(sql: str) -> pd.DataFrame:
-    with sqlite3.connect(DB_PATH) as conn:
-        return pd.read_sql(sql, conn)
 
 
 def _verificar_matriz(X: pd.DataFrame, dominio: str) -> None:
@@ -185,11 +181,12 @@ def segment_retail_customers() -> dict:
     logger.info("=" * 78)
     logger.info("DOMINIO A — Segmentación de clientes retail")
 
-    df = _query(f"""
+    df = warehouse.query(f"""
         SELECT f.sk_cliente, {', '.join('f.' + c for c in FEATURES_RETAIL)},
                c.genero, c.ubicacion, c.edad, c.estado_civil, c.nivel_educativo, c.ocupacion
         FROM fact_campana_marcado f
         JOIN dim_cliente c ON c.sk_cliente = f.sk_cliente
+        ORDER BY f.id_campana_contacto
     """)
     if df.empty:
         logger.warning("Sin datos para el dominio retail.")
@@ -284,7 +281,7 @@ def segment_state_suppliers() -> dict:
     logger.info("=" * 78)
     logger.info("DOMINIO B — Segmentación de proveedores estatales")
 
-    df = _query("""
+    df = warehouse.query("""
         SELECT p.sk_proveedor, p.proveedor_adjudicado, p.es_pyme,
                SUM(f.valor_del_contrato) AS valor_del_contrato,
                SUM(f.valor_pagado)       AS valor_pagado,
@@ -293,6 +290,7 @@ def segment_state_suppliers() -> dict:
         JOIN dim_proveedor_estatal p ON p.sk_proveedor = f.sk_proveedor
         WHERE f.valor_del_contrato > 0
         GROUP BY p.sk_proveedor, p.proveedor_adjudicado, p.es_pyme
+        ORDER BY p.sk_proveedor
     """)
     if df.empty:
         logger.warning("Sin datos para el dominio de proveedores.")
@@ -379,7 +377,7 @@ def segment_transaction_profiles() -> dict:
     logger.info("=" * 78)
     logger.info("DOMINIO C — Segmentación de perfiles transaccionales")
 
-    df = _query("SELECT * FROM fact_fraude_tarjeta")
+    df = warehouse.query("SELECT * FROM fact_fraude_tarjeta")
     if df.empty:
         logger.warning("Sin datos para el dominio transaccional.")
         return {}
@@ -499,31 +497,22 @@ def _pca_visualizacion(preproceso: Pipeline, X: pd.DataFrame):
 
 
 def escribir_clusters(resultado: dict) -> None:
-    """Añade la columna de cluster a su tabla del warehouse, de forma idempotente."""
+    """Persiste las asignaciones como tabla cluster_<dominio> (clave, cluster),
+    reemplazando la corrida anterior. Se une a su tabla de origen por la clave."""
     if not resultado:
         return
-    tabla = resultado["tabla_destino"]
-    columna = resultado["columna_cluster"]
-    clave = resultado["clave"]
     asignaciones = resultado["asignaciones"]
-
-    with sqlite3.connect(DB_PATH) as conn:
-        columnas = {fila[1] for fila in conn.execute(f"PRAGMA table_info({tabla})")}
-        if columna not in columnas:
-            conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} INTEGER")
-        conn.execute(f"UPDATE {tabla} SET {columna} = NULL")
-        conn.executemany(
-            f"UPDATE {tabla} SET {columna} = ? WHERE {clave} = ?",
-            list(zip(asignaciones.cluster.astype(int).tolist(), asignaciones.clave.tolist())),
-        )
-        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{tabla}_{columna} ON {tabla} ({columna})")
-        conn.commit()
-    logger.info("%s.%s poblada para %s entidades.", tabla, columna, len(asignaciones))
+    tabla = pd.DataFrame({
+        resultado["clave"]: asignaciones.clave.to_numpy(),
+        resultado["columna_cluster"]: asignaciones.cluster.astype("int64").to_numpy(),
+    })
+    path = warehouse.write_table(tabla, f"cluster_{resultado['dominio']}")
+    logger.info("%s: %s asignaciones -> %s", resultado["columna_cluster"], len(tabla), path)
 
 
 def main():
-    if not DB_PATH.exists():
-        logger.error("No existe %s. Corre primero: python -m etl.run_pipeline", DB_PATH)
+    if not warehouse.tables():
+        logger.error("No hay tablas gold en %s. Corre primero: python -m etl.run_pipeline", GOLD_DIR)
         return
 
     resultados = {
@@ -533,7 +522,7 @@ def main():
     }
 
     artefacto = {"metadata": {"entrenado_en": datetime.now(timezone.utc).isoformat(),
-                              "fuente": str(DB_PATH)}}
+                              "fuente": str(GOLD_DIR)}}
     logger.info("=" * 78)
     logger.info("RESUMEN")
     for nombre, resultado in resultados.items():
@@ -545,7 +534,7 @@ def main():
                     nombre, resultado["k"], m["silueta"], m["davies_bouldin"],
                     m["calinski_harabasz"],
                     "✔ supera 0.50" if m["silueta"] > 0.50 else "✘ bajo el objetivo 0.50")
-        # El DataFrame de asignaciones no se persiste: ya vive en SQLite.
+        # El DataFrame de asignaciones no va al artefacto: ya vive en cluster_<dominio>.parquet.
         artefacto[nombre] = {k: v for k, v in resultado.items() if k != "asignaciones"}
 
     ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
