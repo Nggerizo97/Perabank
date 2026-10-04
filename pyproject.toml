@@ -1,6 +1,11 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Estos avisos de pandas anticipan roturas reales (así falló CI con pandas 3): se tratan como error.
+filterwarnings = [
+    "error::FutureWarning",
+    "error::pandas.errors.SettingWithCopyWarning",
+]
 
 [tool.ruff]
 line-length = 120

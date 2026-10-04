@@ -78,7 +78,7 @@ Tests y lint (los mismos que corre CI en cada push y PR). No necesitan `data/` n
 datalake: trabajan sobre un silver sintético en memoria.
 
 ```bash
-pip install pytest ruff
+pip install -r requirements-dev.txt
 ruff check .
 pytest
 ```
