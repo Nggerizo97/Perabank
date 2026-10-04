@@ -25,6 +25,7 @@ from etl.gold.facts import (
     build_fact_tasas_mercado,
     build_fact_transaccion,
 )
+from etl.gold.lendingclub import build_fact_prestamo_minorista
 
 logger = get_logger(__name__)
 
@@ -118,6 +119,10 @@ def main():
         },
     )
     _persist(fact_tasas, "fact_tasas_mercado")
+
+    # LendingClub se construye en DuckDB (millones de filas) y valida su FK contra
+    # el dim_fecha.parquet que se acaba de persistir.
+    build_fact_prestamo_minorista()
 
 
     logger.info("--- CAPA GOLD COMPLETADA EXITOSAMENTE ---")

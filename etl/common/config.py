@@ -18,3 +18,7 @@ RAW_SOURCES = {
     "creditcard": DATALAKE_DIR / "creditcard.csv",
 }
 
+# Histórico LendingClub 2007-2020Q3 (~2.9M préstamos, 1.77 GB). Va aparte de
+# RAW_SOURCES porque no cabe en pandas: se procesa con DuckDB en las tres capas.
+LENDINGCLUB_RAW = DATALAKE_DIR / "Loan_status_2007-2020Q3.gzip"
+

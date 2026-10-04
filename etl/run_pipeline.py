@@ -1,3 +1,4 @@
+from etl.bronze.ingest_lendingclub import main as run_bronze_lendingclub
 from etl.bronze.ingest_raw import main as run_bronze
 from etl.enrichment.clean_datos_gov_co import main as run_clean_gov_co
 from etl.enrichment.clean_ecb_rates import main as run_clean_ecb
@@ -11,6 +12,7 @@ from etl.silver.run_silver import main as run_silver
 
 def main():
     run_bronze()
+    run_bronze_lendingclub()
     run_fetch_market()
     run_fetch_ecb()
     run_fetch_gov_co()

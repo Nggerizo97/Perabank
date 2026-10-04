@@ -223,3 +223,39 @@ GOLD_FACT_TASAS_MERCADO_CONTRACT = TableContract(
         ColumnContract("ingested_at", "string", False, "Lineage timestamp"),
     ]
 )
+
+# Grano: un préstamo de LendingClub. Las columnas de origen conservan su nombre;
+# las derivadas (sk_fecha, fico_promedio, meses_historial_credito, es_default,
+# madurado, fecha_corte, estado_final) se documentan en etl/gold/lendingclub.py.
+GOLD_FACT_PRESTAMO_MINORISTA_CONTRACT = TableContract(
+    table_name="fact_prestamo_minorista",
+    layer="gold",
+    primary_keys=["id_prestamo"],
+    foreign_keys={"sk_fecha": "dim_fecha.sk_fecha"},
+    columns=[
+        ColumnContract("id_prestamo", "int64", False, "ID del préstamo en LendingClub"),
+        ColumnContract("sk_fecha", "int64", False, "FK a dim_fecha: mes de originación (YYYYMM01)"),
+        ColumnContract("issue_d", "date", False, "Mes de originación"),
+        ColumnContract("term", "int32", False, "Plazo en meses"),
+        ColumnContract("fico_promedio", "float64", True, "Punto medio del rango FICO al originar"),
+        ColumnContract("meses_historial_credito", "int64", True, "Meses entre la primera línea de crédito y la originación"),
+        ColumnContract("estado_final", "string", False, "loan_status al corte del dataset"),
+        ColumnContract("es_default", "bool", True, "TRUE castigado/default, FALSE pagado, NULL sin desenlace"),
+        ColumnContract("madurado", "bool", False, "El plazo más 6 meses de gracia transcurrió antes del corte"),
+        ColumnContract("fecha_corte", "date", False, "Último mes de originación presente en el dataset"),
+    ] + [
+        ColumnContract(name, "as-is", True, "Columna de LendingClub al originar (ver LCDataDictionary.xlsx)")
+        for name in [
+            "loan_amnt", "funded_amnt", "int_rate", "installment", "grade", "sub_grade", "emp_length",
+            "home_ownership", "annual_inc", "verification_status", "purpose", "addr_state", "zip_code",
+            "dti", "delinq_2yrs", "fico_range_low", "fico_range_high", "inq_last_6mths",
+            "mths_since_last_delinq", "mths_since_last_record", "open_acc", "pub_rec", "revol_bal",
+            "revol_util", "total_acc", "initial_list_status", "application_type", "mort_acc",
+            "pub_rec_bankruptcies", "acc_open_past_24mths", "bc_util", "num_actv_rev_tl",
+            "tot_cur_bal", "total_rev_hi_lim",
+        ]
+    ] + [
+        ColumnContract(name, "as-is", True, "Desenlace del préstamo: conocido solo después de originar")
+        for name in ["last_pymnt_d", "total_pymnt", "total_rec_prncp", "recoveries", "collection_recovery_fee"]
+    ],
+)
