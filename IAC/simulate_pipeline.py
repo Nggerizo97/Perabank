@@ -178,7 +178,7 @@ def main() -> int:
         resultado = simular()
     except Exception as exc:
         print(f"\n✘ La simulación falló: {type(exc).__name__}: {exc}")
-        print(f"  ¿Está el emulador arriba? Diagnostica con: python -m IAC.verify_floci")
+        print("  ¿Está el emulador arriba? Diagnostica con: python -m IAC.verify_floci")
         return 1
 
     print("-" * 66)

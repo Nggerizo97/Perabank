@@ -74,6 +74,15 @@ python models/ml_perabanck_official.py
 streamlit run streamlit_app.py
 ```
 
+Tests y lint (los mismos que corre CI en cada push y PR). No necesitan `data/` ni el
+datalake: trabajan sobre un silver sintético en memoria.
+
+```bash
+pip install pytest ruff
+ruff check .
+pytest
+```
+
 Para la simulación cloud (opcional, no requerida por el pipeline local):
 
 ```bash
