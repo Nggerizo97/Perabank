@@ -257,5 +257,10 @@ GOLD_FACT_PRESTAMO_MINORISTA_CONTRACT = TableContract(
     ] + [
         ColumnContract(name, "as-is", True, "Desenlace del préstamo: conocido solo después de originar")
         for name in ["last_pymnt_d", "total_pymnt", "total_rec_prncp", "recoveries", "collection_recovery_fee"]
+    ] + [
+        ColumnContract("ead_al_default", "float64", True, "Capital pendiente al castigo (solo castigados)"),
+        ColumnContract("recuperacion_neta", "float64", True, "Recuperaciones menos costo de cobranza (solo castigados)"),
+        ColumnContract("lgd_realizada", "float64", True, "1 - recuperacion_neta / ead_al_default, en [0, 1]"),
+        ColumnContract("perdida_realizada", "float64", True, "Pérdida en dinero: castigados > 0, pagados 0, sin desenlace NULL"),
     ],
 )

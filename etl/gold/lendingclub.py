@@ -3,7 +3,7 @@
 Las columnas que vienen de LendingClub conservan su nombre original (documentadas en
 datalake/LCDataDictionary.xlsx); las derivadas aquí van en español.
 
-Dos reglas de negocio viven en esta tabla y en ningún otro lugar:
+Las reglas de negocio sobre el desenlace viven en esta tabla y en ningún otro lugar:
 
 - es_default: TRUE si el préstamo terminó castigado (Charged Off) o en Default; FALSE
   si se pagó por completo; NULL si al corte aún no tiene desenlace (Current, Late,
@@ -14,6 +14,12 @@ Dos reglas de negocio viven en esta tabla y en ningún otro lugar:
   solo préstamos madurados. La gracia existe porque el cierre tarda: en el dataset,
   ~30% de los préstamos vencidos hace 0-3 meses sigue figurando como Current, y la
   fracción sin desenlace cae por debajo del 1% a partir del mes 6.
+- Pérdida realizada, solo para préstamos castigados (Charged Off). Los que están en
+  "Default" sin castigar aún no registran recuperaciones y darían una LGD falsa de 1.
+    ead_al_default    = capital pendiente al castigo: funded_amnt - total_rec_prncp
+    recuperacion_neta = recoveries - collection_recovery_fee (lo que de verdad volvió)
+    lgd_realizada     = 1 - recuperacion_neta / ead_al_default, acotada a [0, 1]
+    perdida_realizada = ead_al_default - recuperacion_neta; 0 si se pagó completo
 """
 from pathlib import Path
 
@@ -31,12 +37,14 @@ MESES_GRACIA = 6
 
 ESTADOS_DEFAULT = ("Charged Off", "Default", "Does not meet the credit policy. Status:Charged Off")
 ESTADOS_PAGADO = ("Fully Paid", "Does not meet the credit policy. Status:Fully Paid")
+ESTADOS_CASTIGO = ("Charged Off", "Does not meet the credit policy. Status:Charged Off")
 
 # Conocidas solo después de originar el préstamo. Nunca pueden ser features de un
 # modelo de originación: describen cómo terminó el crédito, no al solicitante.
 COLUMNAS_POST_ORIGINACION = (
     "estado_final", "es_default", "madurado", "fecha_corte", "last_pymnt_d",
     "total_pymnt", "total_rec_prncp", "recoveries", "collection_recovery_fee",
+    "ead_al_default", "recuperacion_neta", "lgd_realizada", "perdida_realizada",
 )
 
 
@@ -45,31 +53,46 @@ def _sql_list(values: tuple) -> str:
 
 
 GOLD_SQL = f"""
-WITH corte AS (SELECT MAX(issue_d) AS fecha_corte FROM silver)
+WITH corte AS (SELECT MAX(issue_d) AS fecha_corte FROM silver),
+base AS (
+    SELECT s.*, c.fecha_corte,
+           s.loan_status IN ({_sql_list(ESTADOS_CASTIGO)})       AS castigado,
+           GREATEST(s.funded_amnt - s.total_rec_prncp, 0)         AS ead,
+           GREATEST(s.recoveries - s.collection_recovery_fee, 0)  AS recuperado
+    FROM silver s CROSS JOIN corte c
+)
 SELECT
-    s.id                                                     AS id_prestamo,
-    CAST(strftime(s.issue_d, '%Y%m%d') AS BIGINT)            AS sk_fecha,
-    s.issue_d, s.term,
-    s.loan_amnt, s.funded_amnt, s.int_rate, s.installment, s.grade, s.sub_grade,
-    s.emp_length, s.home_ownership, s.annual_inc, s.verification_status, s.purpose,
-    s.addr_state, s.zip_code, s.dti, s.delinq_2yrs,
-    s.fico_range_low, s.fico_range_high,
-    (s.fico_range_low + s.fico_range_high) / 2.0             AS fico_promedio,
-    date_diff('month', s.earliest_cr_line, s.issue_d)        AS meses_historial_credito,
-    s.inq_last_6mths, s.mths_since_last_delinq, s.mths_since_last_record,
-    s.open_acc, s.pub_rec, s.revol_bal, s.revol_util, s.total_acc,
-    s.initial_list_status, s.application_type, s.mort_acc, s.pub_rec_bankruptcies,
-    s.acc_open_past_24mths, s.bc_util, s.num_actv_rev_tl, s.tot_cur_bal, s.total_rev_hi_lim,
-    s.loan_status                                            AS estado_final,
+    b.id                                                     AS id_prestamo,
+    CAST(strftime(b.issue_d, '%Y%m%d') AS BIGINT)            AS sk_fecha,
+    b.issue_d, b.term,
+    b.loan_amnt, b.funded_amnt, b.int_rate, b.installment, b.grade, b.sub_grade,
+    b.emp_length, b.home_ownership, b.annual_inc, b.verification_status, b.purpose,
+    b.addr_state, b.zip_code, b.dti, b.delinq_2yrs,
+    b.fico_range_low, b.fico_range_high,
+    (b.fico_range_low + b.fico_range_high) / 2.0             AS fico_promedio,
+    date_diff('month', b.earliest_cr_line, b.issue_d)        AS meses_historial_credito,
+    b.inq_last_6mths, b.mths_since_last_delinq, b.mths_since_last_record,
+    b.open_acc, b.pub_rec, b.revol_bal, b.revol_util, b.total_acc,
+    b.initial_list_status, b.application_type, b.mort_acc, b.pub_rec_bankruptcies,
+    b.acc_open_past_24mths, b.bc_util, b.num_actv_rev_tl, b.tot_cur_bal, b.total_rev_hi_lim,
+    b.loan_status                                            AS estado_final,
     CASE
-        WHEN s.loan_status IN ({_sql_list(ESTADOS_DEFAULT)}) THEN TRUE
-        WHEN s.loan_status IN ({_sql_list(ESTADOS_PAGADO)})  THEN FALSE
+        WHEN b.loan_status IN ({_sql_list(ESTADOS_DEFAULT)}) THEN TRUE
+        WHEN b.loan_status IN ({_sql_list(ESTADOS_PAGADO)})  THEN FALSE
     END                                                      AS es_default,
-    s.issue_d + to_months(s.term + {MESES_GRACIA}) <= c.fecha_corte AS madurado,
-    c.fecha_corte,
-    s.last_pymnt_d, s.total_pymnt, s.total_rec_prncp, s.recoveries, s.collection_recovery_fee
-FROM silver s CROSS JOIN corte c
-ORDER BY s.id
+    b.issue_d + to_months(b.term + {MESES_GRACIA}) <= b.fecha_corte AS madurado,
+    b.fecha_corte,
+    b.last_pymnt_d, b.total_pymnt, b.total_rec_prncp, b.recoveries, b.collection_recovery_fee,
+    CASE WHEN b.castigado THEN b.ead END                     AS ead_al_default,
+    CASE WHEN b.castigado THEN b.recuperado END              AS recuperacion_neta,
+    CASE WHEN b.castigado AND b.ead > 0
+         THEN LEAST(GREATEST(1 - b.recuperado / b.ead, 0), 1) END AS lgd_realizada,
+    CASE
+        WHEN b.castigado THEN GREATEST(b.ead - b.recuperado, 0)
+        WHEN b.loan_status IN ({_sql_list(ESTADOS_PAGADO)}) THEN 0
+    END                                                      AS perdida_realizada
+FROM base b
+ORDER BY b.id
 """
 
 

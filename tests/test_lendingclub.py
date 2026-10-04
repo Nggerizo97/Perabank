@@ -110,6 +110,23 @@ def test_gold_outcome_and_maturity_rules(capas, tmp_path):
     assert (gold["fecha_corte"] == pd.Timestamp("2016-01-01")).all()
 
 
+def test_gold_realized_loss_rules(capas, tmp_path):
+    castigo = dict(loan_status="Charged Off", funded_amnt="10000", total_rec_prncp="4000")
+    gold = correr_etl(capas, tmp_path, [
+        fila(id="1", recoveries="1000", collection_recovery_fee="100", **castigo),
+        fila(id="2", loan_status="Fully Paid"),
+        fila(id="3", loan_status="Default"),                         # en default, aún sin castigar
+        fila(id="4", recoveries="8000", collection_recovery_fee="0", **castigo),  # recupera más que la EAD
+        fila(id="5", loan_status="Current"),
+    ]).set_index("id_prestamo")
+
+    assert gold.loc[1, ["ead_al_default", "recuperacion_neta", "perdida_realizada"]].tolist() == [6000, 900, 5100]
+    assert gold.loc[1, "lgd_realizada"] == pytest.approx(0.85)
+    assert gold.loc[2, "perdida_realizada"] == 0 and pd.isna(gold.loc[2, "lgd_realizada"])
+    assert gold.loc[[3, 5], ["ead_al_default", "lgd_realizada", "perdida_realizada"]].isna().all().all()
+    assert gold.loc[4, "lgd_realizada"] == 0 and gold.loc[4, "perdida_realizada"] == 0
+
+
 def test_gold_fails_on_dates_outside_dim_fecha(capas, tmp_path):
     build_dim_fecha("2015-01-01", "2015-12-31").to_parquet(capas["gold"] / "dim_fecha.parquet", index=False)
     with pytest.raises(ValueError, match="sk_fecha -> dim_fecha"):

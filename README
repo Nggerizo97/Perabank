@@ -53,6 +53,31 @@ Cada exclusión está justificada en `EXCLUIDAS`.
 PD media predicha 14.94% vs default observado 14.35%; cada decil queda a menos de 2
 puntos de su tasa observada.
 
+### Pérdida esperada: EL = PD × LGD × EAD
+
+Gold mide la pérdida que de verdad ocurrió en cada préstamo castigado: EAD = capital
+pendiente al castigo, LGD = 1 − (recuperaciones − costo de cobranza) / EAD.
+
+**LGD y EAD no se modelan: se usan promedios por plazo.** Un boosting sobre las
+features de originación no supera al promedio fuera de tiempo (R² ≈ 0 en ambas). La
+severidad depende de la cobranza posterior al castigo y la exposición de cuándo llega
+el default; nada de eso se conoce al originar. `evaluar_predictibilidad()` repite la
+comparación en cada corrida.
+
+**Los parámetros salen de la cosecha madurada más reciente**, como la calibración de la
+PD. En 36 meses los defaults de 2016-2017 llegan antes y con más capital pendiente
+(EAD 0.61 vs 0.58 en 2013-2015); con parámetros viejos la pérdida esperada de 2017
+quedaba 5% por debajo de la real.
+
+| Prueba 2017 (71,867 préstamos) | Tasa sobre monto desembolsado |
+|---|---|
+| Pérdida esperada | 8.02% |
+| Pérdida realizada | 8.12% |
+| Esperada / realizada | **0.988** |
+
+Residual conocido: por decil de PD, los deciles bajos se sobreestiman y los altos se
+subestiman en 0.5-1 punto (los deudores más riesgosos caen antes, con más EAD).
+
 ## Arquitectura actual
 
 ![Arquitectura](ArquitecturaPeraBankV2.svg)
@@ -74,6 +99,7 @@ verificado de la simulación cloud (qué se probó, qué no, y el hallazgo de co
 ├── schemas/                       # Contratos de columnas por capa (bronze/silver/gold)
 ├── models/
 │   ├── ml_pd_lendingclub.py       # Probabilidad de default de originación (LendingClub)
+│   ├── ml_perdida_esperada.py     # Pérdida esperada PD × LGD × EAD vs pérdida realizada
 │   ├── ml_perabanck_official.py   # 3 modelos de riesgo (credit/fraud/factoring)
 │   └── ml_clustering_pipeline.py  # Segmentación no supervisada (3 dominios)
 ├── lambda/
@@ -102,6 +128,9 @@ python models/ml_perabanck_official.py
 
 # Entrenar el modelo de probabilidad de default sobre LendingClub
 python models/ml_pd_lendingclub.py
+
+# Pérdida esperada (requiere el modelo de PD)
+python models/ml_perdida_esperada.py
 
 # App
 streamlit run streamlit_app.py
