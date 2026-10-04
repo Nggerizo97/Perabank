@@ -1,15 +1,23 @@
-faker
-pandas
-yfinance
-boto3
-python-dotenv
-numpy
-openpyxl      
-unidecode
-pyarrow
-joblib
-scikit-learn
-streamlit
-plotly
-matplotlib
-moto[server]
+# Versiones fijas: perabank_risk_pipeline_v1.joblib se serializa con scikit-learn y
+# solo se carga de forma confiable con la misma versión que lo entrenó.
+
+# Datos y ML
+pandas==2.2.3
+numpy==2.2.5
+pyarrow==20.0.0
+scikit-learn==1.6.1
+joblib==1.5.0
+
+# Fuentes externas
+yfinance==1.5.2
+requests==2.32.3
+
+# App
+streamlit==1.45.1
+plotly==6.9.0
+
+# Simulación cloud (IAC/, lambda/)
+boto3==1.38.10
+moto[server]==5.2.2
+
+python-dotenv==1.1.0
