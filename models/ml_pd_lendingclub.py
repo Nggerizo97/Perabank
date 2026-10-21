@@ -34,6 +34,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from etl.common import warehouse  # noqa: E402  (requiere REPO_ROOT en sys.path)
 from etl.gold.lendingclub import COLUMNAS_POST_ORIGINACION, TABLE_NAME  # noqa: E402
+from models import razones_pd  # noqa: E402
 
 MODEL_PATH = REPO_ROOT / "models" / "pd_lendingclub_v1.joblib"
 RANDOM_STATE = 42
@@ -110,6 +111,11 @@ def matriz(df: pd.DataFrame) -> pd.DataFrame:
     return X
 
 
+def predecir(modelo: CalibratedClassifierCV, df: pd.DataFrame) -> np.ndarray:
+    """PD calibrada para un DataFrame con las features crudas (sin pasar por matriz)."""
+    return modelo.predict_proba(matriz(df))[:, 1]
+
+
 def ks(y: np.ndarray, proba: np.ndarray) -> float:
     """Kolmogorov-Smirnov: máxima separación entre las distribuciones acumuladas de
     score de buenos y malos. Métrica estándar en scoring de crédito."""
@@ -141,7 +147,7 @@ def entrenar(train: pd.DataFrame, calibracion: pd.DataFrame, **params) -> Calibr
 
 def evaluar(modelo: CalibratedClassifierCV, df: pd.DataFrame) -> dict:
     y = df["es_default"].astype(int).to_numpy()
-    proba = modelo.predict_proba(matriz(df))[:, 1]
+    proba = predecir(modelo, df)
     auc = roc_auc_score(y, proba)
 
     # Benchmark: el orden de sub_grade (A1 mejor ... G5 peor) como score de riesgo.
@@ -179,8 +185,19 @@ def main():
         logger.info("%-13s %9s préstamos | default %.2f%%", nombre, f"{len(parte):,}",
                     100 * parte["es_default"].mean())
 
-    modelo = entrenar(partes["entrenamiento"], partes["calibracion"])
+    train = partes["entrenamiento"]
+    modelo = entrenar(train, partes["calibracion"])
     metricas = {nombre: evaluar(modelo, partes[nombre]) for nombre in ("calibracion", "prueba")}
+
+    # Razones de acción adversa: referencia de buen pagador por feature, y chequeo de
+    # que las razones del decil de mayor riesgo tengan sentido crediticio.
+    refs = razones_pd.referencias(train, FEATURES_NUMERICAS, FEATURES_CATEGORICAS)
+    pd_prueba = predecir(modelo, partes["prueba"])
+    alto_riesgo = partes["prueba"][pd_prueba >= np.quantile(pd_prueba, 0.9)]
+    frecuencia = razones_pd.frecuencia_razones(
+        razones_pd.contribuciones(lambda d: predecir(modelo, d), alto_riesgo, refs))
+    logger.info("Razones más frecuentes en el decil de mayor PD (prueba, %s préstamos):\n%s",
+                f"{len(alto_riesgo):,}", frecuencia.head(8).round(3).to_string())
 
     m = metricas["prueba"]
     logger.info("PRUEBA (fuera de tiempo, %s): AUC %.4f | Gini %.4f | KS %.4f | Brier %.4f",
@@ -196,6 +213,13 @@ def main():
         "excluidas": EXCLUIDAS,
         "ventanas": VENTANAS,
         "metricas": metricas,
+        "referencias": refs,
+        "razones_decil_alto": frecuencia.to_dict(),
+        # Valores iniciales y opciones del formulario de originación en la app.
+        "formulario": {
+            "defaults": {c: float(train[c].median()) for c in FEATURES_NUMERICAS},
+            "categorias": {c: sorted(train[c].dropna().unique().tolist()) for c in FEATURES_CATEGORICAS},
+        },
         "metadata": {
             "entrenado_en": datetime.now(timezone.utc).isoformat(),
             "fuente": TABLE_NAME,

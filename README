@@ -78,6 +78,26 @@ quedaba 5% por debajo de la real.
 Residual conocido: por decil de PD, los deciles bajos se sobreestiman y los altos se
 subestiman en 0.5-1 punto (los deudores más riesgosos caen antes, con más EAD).
 
+### Razones de rechazo (cartas de acción adversa)
+
+Al rechazar una solicitud hay que decirle al solicitante qué factores pesaron. Para
+cada feature, `models/razones_pd.py` mide cuánto bajaría su PD si ese factor tuviera el
+valor de un **buen pagador típico** (mediana o moda de los préstamos pagados del
+entrenamiento); las 4 que más la suben son las razones. En campos como
+`mths_since_last_delinq`, donde la mayoría de los buenos pagadores no tiene dato
+("nunca tuvo mora"), la referencia es justamente "sin dato".
+
+No se usa SHAP: el boosting divide las categóricas por conjuntos de categorías y el
+`TreeExplainer` no soporta esas divisiones. Este método trabaja sobre el modelo
+calibrado completo, el mismo que decide.
+
+En el decil de mayor PD de 2017, las razones más frecuentes son: muchas cuentas
+abiertas en 24 meses (60%), FICO bajo (48%), monto alto frente al ingreso (41%), DTI
+alto (40%), tenencia de vivienda (34%) y consultas de crédito recientes (31%).
+
+La app tiene un tab **Originación (LendingClub)**: el analista ingresa la solicitud y ve
+PD, pérdida esperada en dinero, decisión según un umbral de PD ajustable y las razones.
+
 ## Arquitectura actual
 
 ![Arquitectura](ArquitecturaPeraBankV2.svg)
@@ -100,6 +120,7 @@ verificado de la simulación cloud (qué se probó, qué no, y el hallazgo de co
 ├── models/
 │   ├── ml_pd_lendingclub.py       # Probabilidad de default de originación (LendingClub)
 │   ├── ml_perdida_esperada.py     # Pérdida esperada PD × LGD × EAD vs pérdida realizada
+│   ├── razones_pd.py              # Razones de rechazo por solicitante (acción adversa)
 │   ├── ml_perabanck_official.py   # 3 modelos de riesgo (credit/fraud/factoring)
 │   └── ml_clustering_pipeline.py  # Segmentación no supervisada (3 dominios)
 ├── lambda/

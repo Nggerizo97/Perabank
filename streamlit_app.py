@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -17,6 +18,9 @@ from dotenv import load_dotenv
 
 from etl.common import warehouse
 from etl.common.config import GOLD_DIR
+from models import ml_pd_lendingclub as pd_model
+from models import ml_perdida_esperada as el_model
+from models import razones_pd
 
 REPO_ROOT = Path(__file__).resolve().parent
 MODEL_PATH = REPO_ROOT / "perabank_risk_pipeline_v1.joblib"
@@ -945,6 +949,113 @@ dado el desbalance de clases, y cierra con una recomendación accionable."""
 
 
 # ---------------------------------------------------------------------------
+# Tab — Originación sobre LendingClub (PD, pérdida esperada y razones)
+# ---------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner=False)
+def cargar_artefacto(path: str) -> dict:
+    ruta = Path(path)
+    if not ruta.exists():
+        return {}
+    try:
+        return joblib.load(ruta)
+    except Exception as exc:
+        st.warning(f"No se pudo cargar {ruta.name}: {exc}")
+        return {}
+
+
+# Campos donde el vacío significa "nunca": se piden con una casilla aparte.
+CAMPOS_NUNCA = {"mths_since_last_delinq": "Nunca ha tenido mora",
+                "mths_since_last_record": "Sin registros públicos"}
+
+
+def tab_originacion():
+    st.subheader("Originación de crédito: PD, pérdida esperada y razones de rechazo")
+    pd_art = cargar_artefacto(str(pd_model.MODEL_PATH))
+    el_art = cargar_artefacto(str(el_model.ARTIFACT_PATH))
+    if not pd_art or "referencias" not in pd_art:
+        st.warning("No hay modelo de PD entrenado sobre LendingClub.")
+        st.info("Genéralo con:  `python models/ml_pd_lendingclub.py`  y luego  "
+                "`python models/ml_perdida_esperada.py`")
+        return
+
+    prueba = pd_art["metricas"]["prueba"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("AUC fuera de tiempo (2017)", f"{prueba['auc']:.3f}",
+              delta=f"{prueba['auc'] - prueba['benchmark_subgrado_auc']:+.3f} vs grado LendingClub")
+    c2.metric("KS", f"{prueba['ks']:.3f}")
+    c3.metric("PD media vs default real", f"{prueba['pd_media']:.1%}", delta=f"real {prueba['tasa_default']:.1%}",
+              delta_color="off")
+    if el_art:
+        v = el_art["validacion"]["prueba"]
+        c4.metric("Pérdida esperada / realizada", f"{v['ratio_esperada_realizada']:.3f}",
+                  delta=f"{v['tasa_perdida_esperada']:.2%} vs {v['tasa_perdida_realizada']:.2%}", delta_color="off")
+    st.caption("Modelo entrenado con cosechas 2013-2015, calibrado con 2016 y evaluado con 2017. "
+               "No usa el grado ni la tasa de LendingClub, ni variables geográficas.")
+
+    formulario = pd_art["formulario"]
+    defaults, categorias = formulario["defaults"], formulario["categorias"]
+    with st.form("solicitud"):
+        st.markdown("### Solicitud")
+        entrada = {}
+        cols = st.columns(4)
+        for i, campo in enumerate(pd_model.FEATURES_CATEGORICAS):
+            entrada[campo] = cols[i].selectbox(razones_pd.DESCRIPCIONES[campo][0], categorias[campo])
+
+        numericas = [c for c in pd_model.FEATURES_NUMERICAS if c not in ("monto_sobre_ingreso", "term")]
+        cols = st.columns(4)
+        entrada["term"] = cols[0].selectbox("Plazo (meses)", [36, 60])
+        for i, campo in enumerate(numericas, start=1):
+            col = cols[i % 4]
+            etiqueta = razones_pd.DESCRIPCIONES[campo][0]
+            if campo in CAMPOS_NUNCA:
+                nunca = col.checkbox(CAMPOS_NUNCA[campo], value=True, key=f"nunca_{campo}")
+                valor = col.number_input(etiqueta, min_value=0.0, value=12.0, disabled=nunca)
+                entrada[campo] = np.nan if nunca else valor
+            else:
+                entrada[campo] = col.number_input(etiqueta, min_value=0.0, value=round(defaults[campo], 2))
+        umbral = st.slider("PD máxima para aprobar", 0.05, 0.40, 0.20, 0.01, format="%.2f")
+        enviado = st.form_submit_button("Evaluar solicitud", type="primary", use_container_width=True)
+
+    if not enviado:
+        return
+
+    entrada["monto_sobre_ingreso"] = entrada["loan_amnt"] / entrada["annual_inc"] if entrada["annual_inc"] else np.nan
+    solicitud = pd.DataFrame([entrada])[pd_model.FEATURES]
+    modelo = pd_art["modelo"]
+    probabilidad = float(pd_model.predecir(modelo, solicitud)[0])
+
+    r1, r2, r3 = st.columns(3)
+    aprobada = probabilidad <= umbral
+    r1.metric("Decisión", "APROBAR" if aprobada else "RECHAZAR",
+              delta=f"umbral {umbral:.0%}", delta_color="normal" if aprobada else "inverse")
+    r2.metric("Probabilidad de default (PD)", f"{probabilidad:.2%}")
+    if el_art:
+        parametros = el_art["parametros_lgd_ead"]
+        fila = parametros.loc[entrada["term"]]
+        perdida = probabilidad * fila["lgd"] * fila["ead_ratio"] * entrada["loan_amnt"]
+        r3.metric("Pérdida esperada", moneda(perdida),
+                  delta=f"{perdida / entrada['loan_amnt']:.2%} del monto · LGD {fila['lgd']:.0%} · "
+                        f"EAD {fila['ead_ratio']:.0%}", delta_color="off")
+
+    refs = pd_art["referencias"]
+    contrib = razones_pd.contribuciones(lambda d: pd_model.predecir(modelo, d), solicitud, refs).iloc[0]
+    principales = razones_pd.razones(solicitud.iloc[0], contrib, refs)
+    st.markdown("### " + ("Razones principales del rechazo (carta de acción adversa)" if not aprobada
+                          else "Factores que más elevan el riesgo"))
+    if not principales:
+        st.success("Ningún factor eleva la PD frente a un buen pagador típico.")
+        return
+    tabla = pd.DataFrame(principales)
+    tabla["aumento_pd"] = tabla["aumento_pd"].map(lambda x: f"+{100 * x:.1f} pp")
+    st.dataframe(tabla[["razon", "valor", "referencia", "aumento_pd"]].rename(columns={
+        "razon": "Razón", "valor": "Solicitante", "referencia": "Buen pagador típico",
+        "aumento_pd": "Aumento de PD"}), use_container_width=True, hide_index=True)
+    st.caption("Cada razón mide cuánto bajaría la PD si ese factor tuviera el valor de un buen pagador "
+               "típico (mediana de los préstamos pagados en el entrenamiento).")
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     st.title("🏦 PeraBank — Risk & Market Intelligence")
@@ -960,6 +1071,7 @@ def main():
         st.metric("Tamaño en Parquet", f"{warehouse.size_bytes() / 1e6:,.0f} MB")
         st.write("**Modelos ML:**", "✅ cargados" if cargar_modelos() else "⚠️ sin entrenar")
         st.write("**Segmentación:**", "✅ cargada" if cargar_clustering() else "⚠️ sin generar")
+        st.write("**PD LendingClub:**", "✅ cargada" if cargar_artefacto(str(pd_model.MODEL_PATH)) else "⚠️ sin entrenar")
         listo, detalle = ollama_disponible()
         st.write("**Ollama (local):**", f"✅ {detalle}" if listo else "⚠️ no disponible")
         if not listo:
@@ -968,9 +1080,10 @@ def main():
             st.cache_data.clear()
             st.rerun()
 
-    t1, t2, t3, t4, t5, t6 = st.tabs([
+    t1, t2, t3, t4, t5, t6, t7 = st.tabs([
         "📊 Portafolio", "📈 Tesorería y mercado", "🏦 Tasas bancarias",
         "🏛️ Factoring estatal", "🎯 Segmentación y personas", "🛡️ Scoring de riesgo",
+        "📝 Originación (LendingClub)",
     ])
     with t1:
         tab_portafolio()
@@ -984,6 +1097,8 @@ def main():
         tab_segmentacion()
     with t6:
         tab_scoring()
+    with t7:
+        tab_originacion()
 
 
 if __name__ == "__main__":
